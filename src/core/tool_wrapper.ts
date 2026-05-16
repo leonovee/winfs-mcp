@@ -14,6 +14,7 @@ import {
  * JSON without re-parsing the textual representation.
  */
 export interface ToolResponse {
+  [key: string]: unknown;
   content: { type: "text"; text: string }[];
   structuredContent: Record<string, unknown>;
   isError?: boolean;
@@ -74,20 +75,16 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
     ctx.config.maxTimeoutMs,
   );
 
-  let result: Result<TValue> | StructuredError;
+  let result: Result<TValue>;
   try {
     const raced = await withTimeout(
       (signal) => impl(args, signal),
       timeoutMs,
       { tool: ctx.tool },
     );
-    if (raced && typeof raced === "object" && "ok" in raced) {
-      result = raced as Result<TValue>;
-    } else {
-      // withTimeout returns either the awaited value or a StructuredError.
-      // Type narrowing helper:
-      result = raced as Result<TValue>;
-    }
+    // withTimeout returns Result<TValue> | StructuredError. StructuredError IS
+    // a valid Result so this is just a widening cast.
+    result = raced as Result<TValue>;
   } catch (err) {
     result = buildError(
       "EIO",
@@ -96,18 +93,23 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
   }
 
   const duration = Date.now() - started;
-  const isOk = result.ok === true;
+  if (result.ok) {
+    appendAudit(ctx.config, {
+      ts: new Date().toISOString(),
+      tool: ctx.tool,
+      args_summary: sanitizeArgs(args),
+      result_status: "ok",
+      duration_ms: duration,
+    });
+    return successResponse(result.value, ctx.tool);
+  }
   appendAudit(ctx.config, {
     ts: new Date().toISOString(),
     tool: ctx.tool,
     args_summary: sanitizeArgs(args),
-    result_status: isOk ? "ok" : "error",
-    ...(isOk ? {} : { error_code: result.error.code as ErrorCode }),
+    result_status: "error",
+    error_code: result.error.code as ErrorCode,
     duration_ms: duration,
   });
-
-  if (isOk) {
-    return successResponse(result.value, ctx.tool);
-  }
   return errorResponse(result, ctx.tool);
 }
