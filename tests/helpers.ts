@@ -1,0 +1,40 @@
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import type { ResolvedConfig } from "../src/core/config.js";
+
+/**
+ * Create a temp directory and return it as a single-root canonical config.
+ * Each test gets its own root so parallel runs don't collide. Caller is
+ * responsible for cleanup via `cleanupTempConfig`.
+ */
+export async function makeTempConfig(): Promise<{ config: ResolvedConfig; root: string }> {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-winfs-test-"));
+  const real = await fs.realpath(base);
+  const auditPath = path.join(real, "_audit.jsonl");
+
+  const config: ResolvedConfig = {
+    allowedRoots: [real],
+    allowedUrlHosts: [],
+    deniedUrlPatterns: [],
+    shellBlocklist: [],
+    defaultTimeoutMs: 5000,
+    maxTimeoutMs: 10000,
+    shellTimeoutMs: 5000,
+    shellMaxTimeoutMs: 30000,
+    fetchUrlMaxBytes: 1024 * 1024,
+    fetchUrlTimeoutMs: 5000,
+    readMaxBytes: 1024 * 1024,
+    auditLogMaxBytes: 1024 * 1024,
+    configPath: "<test>",
+    resolvedAllowedRoots: [path.normalize(real)],
+    resolvedAuditLogPath: auditPath,
+    version: "0.1.0-test",
+  };
+
+  return { config, root: real };
+}
+
+export async function cleanupTempConfig(root: string): Promise<void> {
+  await fs.rm(root, { recursive: true, force: true });
+}
