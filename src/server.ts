@@ -10,6 +10,10 @@ import { registerMkdirTool } from "./tools/fs/mkdir.js";
 import { registerMoveTool } from "./tools/fs/move.js";
 import { registerCopyTool } from "./tools/fs/copy.js";
 import { registerReadMultipleFilesTool } from "./tools/fs/read_multiple_files.js";
+import { registerGlobTool } from "./tools/search/glob.js";
+import { registerReadJsonTool } from "./tools/search/read_json.js";
+import { registerGrepTool } from "./tools/search/grep.js";
+import { registerAuditTailTool } from "./tools/system/audit_tail.js";
 
 export function createServer(config: ResolvedConfig): McpServer {
   const server = new McpServer({
@@ -30,6 +34,12 @@ export function createServer(config: ResolvedConfig): McpServer {
   registerMoveTool(server, config);
   registerCopyTool(server, config);
   registerReadMultipleFilesTool(server, config);
+
+  // v0.3 search + self-recovery
+  registerGlobTool(server, config);
+  registerReadJsonTool(server, config);
+  registerGrepTool(server, config);
+  registerAuditTailTool(server, config);
 
   return server;
 }
