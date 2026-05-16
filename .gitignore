@@ -8,6 +8,12 @@ coverage/
 # Local Claude Code state (per-machine)
 .claude/settings.local.json
 
+# Local working config with real paths (not the template)
+configs/local.json
+
+# Smoke test artifacts
+test-cyrillic.txt
+
 # OS / editor
 Thumbs.db
 .vscode/

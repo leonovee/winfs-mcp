@@ -10,13 +10,21 @@ import {
 
 /**
  * Shape of the value an MCP tool handler returns to the SDK.
- * `structuredContent` is the modern V1 SDK feature that lets clients consume
- * JSON without re-parsing the textual representation.
+ *
+ * MCP convention (v0.1.1): `structuredContent` must mirror the declared
+ * `outputSchema` exactly — pure payload, no service envelope. Errors omit
+ * `structuredContent` entirely and rely on `isError: true` plus a text
+ * `content` block carrying the error JSON.
+ *
+ * The previous shape (`{ok, tool, ...payload}`) caused Claude Desktop to
+ * surface every successful call as failed because the extra keys violated
+ * `additionalProperties: false` in the per-tool output schemas. See
+ * docs/v0.2-backlog.md #1.
  */
 export interface ToolResponse {
   [key: string]: unknown;
   content: { type: "text"; text: string }[];
-  structuredContent: Record<string, unknown>;
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }
 
@@ -27,28 +35,27 @@ export interface ToolContext {
   timeoutMs?: number;
 }
 
-/** Build a uniform error response shape (no thrown exceptions for handlers). */
-function errorResponse(err: StructuredError, tool: string): ToolResponse {
-  const payload = {
-    ok: false as const,
-    tool,
-    error: err.error,
-  };
+/**
+ * Error path: omit structuredContent so the per-tool outputSchema is not
+ * validated against an error envelope (MCP spec: outputSchema only applies
+ * when isError is false / unset). The text content carries the structured
+ * error so model clients can still parse it.
+ */
+function errorResponse(err: StructuredError): ToolResponse {
   return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload,
+    content: [{ type: "text", text: JSON.stringify(err.error, null, 2) }],
     isError: true,
   };
 }
 
-function successResponse<T extends Record<string, unknown>>(
-  value: T,
-  tool: string,
-): ToolResponse {
-  const payload = { ok: true as const, tool, ...value };
+/**
+ * Success path: structuredContent is the pure payload — matches the tool's
+ * declared outputSchema field-for-field, no `ok` / `tool` wrapper.
+ */
+function successResponse<T extends Record<string, unknown>>(value: T): ToolResponse {
   return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload,
+    content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
+    structuredContent: value,
   };
 }
 
@@ -101,7 +108,7 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
       result_status: "ok",
       duration_ms: duration,
     });
-    return successResponse(result.value, ctx.tool);
+    return successResponse(result.value);
   }
   appendAudit(ctx.config, {
     ts: new Date().toISOString(),
@@ -111,5 +118,5 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
     error_code: result.error.code as ErrorCode,
     duration_ms: duration,
   });
-  return errorResponse(result, ctx.tool);
+  return errorResponse(result);
 }

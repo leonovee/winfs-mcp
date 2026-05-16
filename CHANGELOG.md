@@ -3,6 +3,32 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.1.1] — 2026-05-16 — Hotfix
+
+### Fixed
+
+- **Release-blocker:** Claude Desktop surfaced every successful tool call
+  as failed because `structuredContent` carried an `{ok, tool, ...payload}`
+  service envelope that violated the per-tool `outputSchema` contract
+  (extra properties on a closed schema). Audit log showed
+  `result_status: "ok"` for the same calls, confirming server-side
+  correctness — the bug was the response shape.
+- `src/core/tool_wrapper.ts`:
+  - **Success path:** `structuredContent` is now the pure payload —
+    mirrors `outputSchema` field-for-field, no `ok` / `tool` wrapper.
+  - **Error path:** omit `structuredContent` entirely; set `isError: true`
+    and put the structured error JSON (`{code, message, hint?, details?}`)
+    in the text `content` block. Per MCP spec, `outputSchema` is not
+    validated when `isError` is true.
+- Resolves [`docs/v0.2-backlog.md`](docs/v0.2-backlog.md) #1.
+
+### Added
+
+- `tests/invariants/structured_content.test.ts` — 4 tests pinning the
+  v0.1.1 contract: success has pure payload, error has no
+  `structuredContent`, timeout shaped as error, real-tool round-trip via
+  `write` produces only its declared output fields.
+
 ## [0.1.0] — 2026-05-16
 
 First milestone. Implements the spec §7 v0.1 slice.
