@@ -5,9 +5,9 @@ Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
 UTF-8-no-BOM invariant.
 
-**Status:** v0.1 — 5 tools (`read`, `write`, `append`, `list`, `stat`) and
-the full core/ invariant layer. v0.2+ adds the remaining 24 tools per
-`docs/design/mcp-winfs-spec.md` §7.
+**Status:** v0.2 — 10 tools (5 core from v0.1 + 5 mutations / batch /
+introspection) and the full core/ invariant layer. v0.3+ adds the
+remaining 19 tools per `docs/design/mcp-winfs-spec.md` §7.
 
 ## Install
 
@@ -73,7 +73,9 @@ Use absolute paths for both `dist/index.js` and the config. **Do not use
 Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 `list`, `stat`) should appear in the tools list.
 
-## Tools (v0.1)
+## Tools (v0.2)
+
+### Core FS (v0.1)
 
 | Tool   | Read-only | What it does                                              |
 |--------|-----------|-----------------------------------------------------------|
@@ -83,8 +85,19 @@ Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 | list   | yes       | Recursive directory listing with `max_depth` ≤ 5 and basename glob. |
 | stat   | yes       | Path metadata. Returns `{exists:false}` instead of `ENOENT` for missing paths. |
 
-Every tool returns `structuredContent` so a client can read the result
-without re-parsing the textual representation.
+### Mutations + batch + introspection (v0.2)
+
+| Tool                       | Read-only | What it does                                                                |
+|----------------------------|-----------|-----------------------------------------------------------------------------|
+| `mkdir`                    | no        | Create a directory. `recursive:true` (default) → `mkdir -p` semantics: idempotent on existing dir. |
+| `move`                     | no        | Rename / move within allowedRoots. Same-volume only — cross-volume fails fast with `EIO + errno:EXDEV` (see spec amendment §A). Both `src` and `dst` must be inside allowedRoots. |
+| `copy`                     | no        | Recursive copy. Each entry realpath-checked; junction/symlink escape or dangling links are skipped and reported in `files_skipped + skipped_paths` (cap 10). |
+| `read_multiple_files`      | yes       | Batch read 1..50 paths in parallel with per-file timeout. Per-file errors propagate inside `files[]`; top-level call never `isError`. |
+| `list_allowed_directories` | yes       | Self-orientation. Returns `{allowed_roots, allowed_url_hosts}` only — never leaks blocklists, timeouts, or audit path. |
+
+Every tool returns pure-payload `structuredContent` that matches its
+declared `outputSchema` 1:1 (no `ok` / `tool` envelope — see [v0.1.1
+hotfix](docs/v0.2-backlog.md#1--structuredcontent-validation-mismatch-on-every-tool-response--resolved-in-v011)).
 
 ## Hard invariants (always on)
 
@@ -108,10 +121,25 @@ without re-parsing the textual representation.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `Failed to load config at <path>` on startup | Config file has a UTF-8 BOM (Notepad / `Set-Content -Encoding UTF8` writes one). | Re-save with `Out-File -Encoding utf8NoBOM` or an editor that lets you turn the BOM off. |
-| Claude Desktop reports "MCP server failed to start", no logs | `"command": "node"` resolved to a `node.exe` that isn't on PATH from the MSIX-virtualised session. | Use the absolute path: `"C:\\Program Files\\nodejs\\node.exe"`. |
+| Claude Desktop reports "MCP server failed to start", no logs | `"command": "node"` resolved to a `node.exe` that isn't on PATH from the MSIX-virtualised session. The inherited PATH does not resolve `node` for child processes under MSIX virtualisation. | Use the absolute path: `"command": "C:\\Program Files\\nodejs\\node.exe"`. |
 | `Cannot find module` or hash-bang errors | Built with the wrong Node version (< 18) or `dist/` not built. | `node --version` → ≥ 18, then `npm run build`. |
-| Every call returns `EPERM_ROOT` | No `allowedRoots` configured or paths refer to a drive letter the user lacks read access to. | Run the `list_allowed_directories` tool (v0.2+) or check `configPath` field of the startup log on stderr. |
+| Every call returns `EPERM_ROOT` | No `allowedRoots` configured or paths refer to a drive letter the user lacks read access to. | Call `list_allowed_directories` to see what's actually configured, or check the `configPath` field on the startup log on stderr. |
 | Audit log isn't appearing | `%LOCALAPPDATA%` not set (unusual) or path contains literal `%LOCALAPPDATA%`. | Set the env var or use an absolute `auditLogPath` in the config. |
+| Inspector says "No servers found" when launched with `--config configs/local.json` | Inspector consumes `--config` as its own flag and expects a list-of-servers JSON. | Add the `--` separator so the flag reaches mcp-winfs: `npx @modelcontextprotocol/inspector node dist/index.js -- --config configs/local.json`. |
+| Strict config schema rejects `_comment` keys | The Zod schema is `.strict()` — no JSON-native commentary. | Move documentation to `configs/README.md` or to neighbouring `.md` notes. |
+
+### Local working config
+
+`configs/default.json` ships as a placeholder template. The recommended
+dev loop is to copy it to `configs/local.json` (gitignored) with real
+`allowedRoots` paths and point both Inspector and Claude Desktop at the
+local file:
+
+```powershell
+Copy-Item configs/default.json configs/local.json
+# edit configs/local.json with your real paths …
+npx @modelcontextprotocol/inspector node dist/index.js -- --config configs/local.json
+```
 
 ## Tests
 
@@ -120,20 +148,22 @@ npm test          # vitest run
 npm run test:watch
 ```
 
-v0.1 ships 44 tests: 27 unit (per-tool happy path + every error code) and
-17 invariant (UTF-8 roundtrip, junction/`..` escape, timeout abort,
-atomic-write integrity, audit redaction).
+v0.2 ships 84 tests: 53 unit (per-tool happy path + every error code
+across 10 tools) and 31 invariant (UTF-8 roundtrip, junction/`..` escape,
+timeout abort, atomic-write integrity, audit redaction, both-roots check
+for mutations, structuredContent shape across all 10 tools).
 
-## Acceptance report
+## Acceptance reports
 
-See [`docs/v0.1-acceptance.md`](docs/v0.1-acceptance.md) for the v0.1
-acceptance criteria checklist with evidence per item.
+- v0.1: [`docs/v0.1-acceptance.md`](docs/v0.1-acceptance.md)
+- v0.2: [`docs/v0.2-acceptance.md`](docs/v0.2-acceptance.md)
 
 ## Roadmap
 
 `docs/design/mcp-winfs-spec.md` §7 has the full phasing:
 
-- **v0.2** — `move`, `copy`, `mkdir`, `read_multiple_files`, `list_allowed_directories`
+- ✅ **v0.1** — `read`, `write`, `append`, `list`, `stat`
+- ✅ **v0.2** — `mkdir`, `move`, `copy`, `read_multiple_files`, `list_allowed_directories`
 - **v0.3** — `grep`, `glob`, `read_json`, `audit_tail`
 - **v0.4** — `edit_file` (with `dry_run`), `read_section`, `read_since`, `diff_files`
 - **v0.5** — git read-only (`log`, `status`, `diff`, `show`, `blame`)

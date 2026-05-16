@@ -3,6 +3,56 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.2.0] — 2026-05-16
+
+Mutations + batch read + introspection. Closes spec §7 v0.2 milestone:
+"versioning workflow можно делать без shell".
+
+### Added
+
+- **`mkdir`** — Create a directory. `recursive: true` (default) implements
+  `mkdir -p`: idempotent on existing directory (`created: false`, no error).
+  `recursive: false` on an existing directory → `EEXIST`.
+- **`move`** — Atomic rename / move via `fs.rename`. Both `src` and `dst`
+  must be inside `allowedRoots` after realpath. Cross-volume rename
+  fails fast with `EIO + errno: EXDEV` (no silent copy+delete fallback —
+  see spec amendment §A). Defaults to `overwrite: false`.
+- **`copy`** — Recursive file/directory copy. Each entry inside the
+  source tree is realpath-checked during the walk; junction/symlink
+  escape or dangling-symlink entries are skipped and reported in
+  `files_skipped` + `skipped_paths` (cap 10 entries; see spec amendment
+  §B).
+- **`read_multiple_files`** — Batch-read 1..50 paths in parallel. Each
+  file has an independent per-file timeout (`config.defaultTimeoutMs`).
+  Per-file errors propagate inside `files[]` as `{path, error: {code,
+  message, hint?}}`; the top-level call never returns `isError: true` —
+  even an all-failed batch returns a uniform shape (see spec amendment
+  §C).
+- **`list_allowed_directories`** — Self-orientation tool. Returns
+  exactly `{allowed_roots, allowed_url_hosts}` — never leaks blocklists,
+  timeouts, or `auditLogPath` (see spec amendment §D).
+- `tests/invariants/both_roots.test.ts` (5 tests) — pins the v0.2
+  invariant that both `src` and `dst` of `move`/`copy` must be inside
+  allowedRoots; one-sided checks are insufficient. Also confirms `mkdir`
+  on an outside-sandbox target returns `EPERM_ROOT` without side-effects.
+- `tests/invariants/structured_content.test.ts` extended (9 tests
+  total) — pure-payload check for each new v0.2 tool.
+- Spec amendment `2026-05-16 — v0.2 open-question decisions`: locks the
+  four behavioural questions (cross-volume move, broken-symlink copy,
+  batch-read concurrency, introspection surface).
+
+### Tests
+
+- 84 passing total (was 48 in v0.1.1). 53 unit + 31 invariant.
+
+### Notes
+
+- v0.1 deferred operator probe (acceptance #4) was completed during v0.1.1
+  follow-up — see `docs/v0.1-acceptance.md`.
+- README troubleshooting expanded with the MSIX `node.exe` absolute-path
+  note, the `configs/local.json` workflow, the Inspector `--` separator
+  gotcha, and the strict-config no-`_comment` rule.
+
 ## [0.1.1] — 2026-05-16 — Hotfix
 
 ### Fixed
