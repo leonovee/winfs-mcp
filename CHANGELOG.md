@@ -3,6 +3,55 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.3] — 2026-05-16
+
+DeepSeek post-v0.3.2 review polish. All P3 items, `audit_tail`-scoped.
+
+### Changed — security & error hygiene
+
+- **`audit_tail` rejects non-absolute `auditLogPath`** (`EPERM_ROOT`,
+  layer 0 of the path-validation stack). A relative path here would
+  silently resolve against `process.cwd()` — an operator-controlled
+  variable that is not part of the configured contract. Up-front
+  assertion makes the rule explicit and uncacheable.
+- **Structured EIO error details on `audit_tail`.** Four call sites
+  (`realpath` / `open` / `fstat` / tail-from-handle) no longer
+  concatenate raw Node.js `error.message` strings into the user-facing
+  `message` field. The raw cause now lives in `error.details.cause`
+  with the `errno` code in `error.details.errno`. Reduces accidental
+  disclosure of internal file paths and OS-specific error wording in
+  the human-readable message line; makes the structured `code`/`message`
+  surface stable for programmatic dispatch.
+
+### Docs
+
+- `audit_tail` tool description rewritten to call out the absolute-path
+  requirement and the new `error.details.cause` location.
+- Threat-model docstring on `openAuditLog` extended with layer 0
+  (`isAbsolute`) ahead of the existing four-layer stack.
+- README post-P1.3 security-stack wording corrected — the old
+  "parent dir + .jsonl suffix" sentence (true only in v0.3.0/v0.3.1)
+  replaced with the actual v0.3.2+ guarantees (absolute path, `.jsonl`
+  on both configured and `realpath`-resolved, `fstat` on bound fd).
+
+### Considered & rejected
+
+- **Rename `audit_tail.total` → `entries_returned`** (kimi + gemini P3).
+  Spec amendment §F (`docs/design/mcp-winfs-spec.md` L876) explicitly
+  fixes `total: number — always array.length` as the envelope convention
+  for every plural-tool response (`read_multiple_files`, `glob`, `grep`,
+  `audit_tail`). The reviewers' complaint reads against the spec.
+  Renaming would break a documented contract. If a genuine
+  "scanned vs returned" diagnostic is wanted, a supplementary
+  `entries_seen_total` field can be added in v0.4 — deferred.
+
+### Tests
+
+- 129 passing total (was 128 in v0.3.2). +1 unit test in
+  `tests/unit/system/audit_tail.test.ts` for non-absolute path
+  rejection asserting `error.code === "EPERM_ROOT"`, message contains
+  "absolute", and `error.details` matches `{ configured }`.
+
 ## [0.3.0] — 2026-05-16
 
 Search + self-recovery surface. Closes spec §7 v0.3 milestone: "Claude can

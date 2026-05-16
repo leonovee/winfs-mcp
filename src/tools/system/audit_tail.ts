@@ -55,6 +55,8 @@ interface AuditTailResult extends Record<string, unknown> {
  *     config injection + filesystem-level TOCTOU.
  *
  * Defenses, in layered order:
+ *   0. `path.isAbsolute` check — rejects relative paths that would be
+ *      resolved against `process.cwd()`, an out-of-band variable.
  *   1. Lexical `.jsonl` extension check on the configured path (config
  *      injection can't point at /etc/passwd or system.ini).
  *   2. `fs.realpath` round-trip to canonicalise away symlinks/junctions.
@@ -135,6 +137,23 @@ async function openAuditLog(
   configuredPath: string,
   signal: AbortSignal | undefined,
 ): Promise<OpenAuditLog> {
+  // P3 (deepseek): assert absolute path before any filesystem op. A relative
+  // path here would be resolved against `process.cwd()`, which is operator-
+  // controlled but not part of the configured contract; rejecting up-front
+  // makes the rule explicit and uncacheable.
+  if (!path.isAbsolute(configuredPath)) {
+    return {
+      kind: "error",
+      error: buildError(
+        "EPERM_ROOT",
+        "configured auditLogPath must be absolute",
+        {
+          details: { configured: configuredPath },
+          hint: "Set auditLogPath to an absolute filesystem path; relative paths are rejected because they resolve against process.cwd().",
+        },
+      ),
+    };
+  }
   if (!isAuditLogPathLegitimate(configuredPath)) {
     return {
       kind: "error",
@@ -164,8 +183,12 @@ async function openAuditLog(
     if (e?.code === "ENOENT") return { kind: "missing" };
     return {
       kind: "error",
-      error: buildError("EIO", `audit log realpath failed: ${e?.message ?? String(err)}`, {
-        details: { configured: configuredPath },
+      error: buildError("EIO", "audit log realpath failed", {
+        details: {
+          configured: configuredPath,
+          cause: e?.message ?? String(err),
+          errno: e?.code,
+        },
       }),
     };
   }
@@ -205,8 +228,13 @@ async function openAuditLog(
     if (e?.code === "ENOENT") return { kind: "missing" };
     return {
       kind: "error",
-      error: buildError("EIO", `audit log open failed: ${e?.message ?? String(err)}`, {
-        details: { configured: configuredPath, resolved },
+      error: buildError("EIO", "audit log open failed", {
+        details: {
+          configured: configuredPath,
+          resolved,
+          cause: e?.message ?? String(err),
+          errno: e?.code,
+        },
       }),
     };
   }
@@ -227,8 +255,12 @@ async function openAuditLog(
     }
     return {
       kind: "error",
-      error: buildError("EIO", `audit log fstat failed: ${(err as Error).message}`, {
-        details: { configured: configuredPath, resolved },
+      error: buildError("EIO", "audit log fstat failed", {
+        details: {
+          configured: configuredPath,
+          resolved,
+          cause: (err as Error).message,
+        },
       }),
     };
   }
@@ -400,8 +432,8 @@ export async function auditTailImpl(
         details: { resolved: opened.resolved },
       });
     }
-    return buildError("EIO", `failed to read audit log: ${(err as Error).message}`, {
-      details: { resolved: opened.resolved },
+    return buildError("EIO", "failed to read audit log", {
+      details: { resolved: opened.resolved, cause: (err as Error).message },
     });
   } finally {
     await opened.handle.close().catch(() => {});
@@ -419,7 +451,7 @@ Use this to recover from chat context loss: the log records tool name, sanitized
 status, error code (if any) and duration.
 
 The audit log lives OUTSIDE allowedRoots by design (\`%LOCALAPPDATA%\\mcp-winfs\\audit.jsonl\`
-on Windows). The configured path is checked lexically (must end in \`.jsonl\`), then
+on Windows). The configured path must be absolute and end in \`.jsonl\` (lexical check), then
 \`fs.realpath\` resolves any symlinks/junctions, the resolved path is re-validated, and
 \`fs.open\` is invoked on the RESOLVED path so the file descriptor is bound to an inode at
 open time — subsequent junction swaps of the configured path cannot redirect reads.
@@ -435,7 +467,9 @@ Args:
   - n (number, optional): entries to return. Default ${DEFAULT_N}, hard cap ${HARD_CAP}.
 
 Returns: { entries: Array<{ts, tool, args_summary, result_status, error_code?, duration_ms}>, total }
-Errors: EPERM_ROOT (path fails .jsonl check before or after realpath, or resolves to a non-file), ETIMEDOUT (I/O aborted by wrapper), EIO.`,
+  - \`total\` is always \`entries.length\` per the envelope convention in spec §F.
+
+Errors: EPERM_ROOT (non-absolute path, missing/wrong extension before or after realpath, non-regular file), ETIMEDOUT (I/O aborted by wrapper), EIO (filesystem failure — raw cause in \`error.details.cause\`).`,
       inputSchema: InputShape,
       outputSchema: OutputShape,
       annotations: {

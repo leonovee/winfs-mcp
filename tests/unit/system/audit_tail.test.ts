@@ -97,6 +97,19 @@ describe("tools/system/audit_tail", () => {
     expect(res.error.code).toBe("EPERM_ROOT");
   });
 
+  it("EPERM_ROOT when configured auditLogPath is not absolute (v0.3.3 deepseek P3)", async () => {
+    const badConfig: ResolvedConfig = {
+      ...config,
+      resolvedAuditLogPath: "audit.jsonl", // relative — would resolve against cwd
+    };
+    const res = await auditTailImpl({ n: 50 }, badConfig);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("expected error");
+    expect(res.error.code).toBe("EPERM_ROOT");
+    expect(res.error.message.toLowerCase()).toContain("absolute");
+    expect(res.error.details).toMatchObject({ configured: "audit.jsonl" });
+  });
+
   it("isAuditLogPathLegitimate enforces .jsonl extension only (kimi P1.3)", () => {
     // v0.3.0/v0.3.1 also required parent-dir === "mcp-winfs" — removed in
     // v0.3.2 per kimi P1.3 (parent layer was defense-in-depth and brittle

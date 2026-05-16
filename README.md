@@ -103,7 +103,7 @@ Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 | `glob`        | yes       | Find files matching an absolute glob (`*`, `?`, `**`, `[...]`; no brace expansion). Pattern's literal prefix must be inside allowedRoots. Default cap 200, hard cap 2000 → `truncated:true`. |
 | `grep`        | yes       | Regex search across files matching a glob, with `case_sensitive` flag, `context_lines` (0..10) and `max_matches`. Pattern compiled with `new RegExp` — no `eval`. Deadline returns partial results with `{truncated:true, reason:"timeout"}` instead of erroring. |
 | `read_json`   | yes       | Read + `JSON.parse` in one call. Distinct `EBADJSON` code for parse failures (with line / column / snippet). Inherits `read`'s allowedRoots, BOM and `ETOOLARGE` semantics. |
-| `audit_tail`  | yes       | Tail the structured audit log for self-recovery after context loss. Reads from `%LOCALAPPDATA%\mcp-winfs\audit.jsonl` (the only legitimate exception to allowedRoots — gated by a shape check on parent dir + `.jsonl` suffix). Default 50, hard cap 500. |
+| `audit_tail`  | yes       | Tail the structured audit log for self-recovery after context loss. Reads from `%LOCALAPPDATA%\mcp-winfs\audit.jsonl` (the only legitimate exception to allowedRoots — gated by an absolute-path check, `.jsonl` extension check on both configured and `realpath`-resolved paths, and `fstat` against the bound file descriptor). Default 50, hard cap 500. |
 
 Every tool returns pure-payload `structuredContent` that matches its
 declared `outputSchema` 1:1 (no `ok` / `tool` envelope — see [v0.1.1
