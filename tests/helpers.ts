@@ -29,6 +29,7 @@ export async function makeTempConfig(): Promise<{ config: ResolvedConfig; root: 
     fetchUrlMaxBytes: 1024 * 1024,
     fetchUrlTimeoutMs: 5000,
     readMaxBytes: 1024 * 1024,
+    maxDiffBytes: 256 * 1024,
     auditLogMaxBytes: 1024 * 1024,
     configPath: "<test>",
     resolvedAllowedRoots: [path.normalize(real)],

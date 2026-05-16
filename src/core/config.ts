@@ -16,6 +16,7 @@ const CONFIG_SCHEMA = z
     fetchUrlMaxBytes: z.number().int().positive().default(5 * 1024 * 1024),
     fetchUrlTimeoutMs: z.number().int().positive().default(15_000),
     readMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),
+    maxDiffBytes: z.number().int().positive().default(256 * 1024),
     auditLogPath: z.string().optional(),
     auditLogMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),
   })

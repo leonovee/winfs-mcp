@@ -11,24 +11,33 @@ export interface AuditRecord {
   duration_ms: number;
 }
 
-const SENSITIVE_ARG_KEYS = new Set(["content"]);
+const SENSITIVE_ARG_KEYS = new Set(["content", "edits", "a_inline", "b_inline"]);
 
 /**
  * Sanitize an args object for audit logging:
- *   - Replace any `content` field with `<redacted: N bytes>`
+ *   - String at a sensitive key → `<redacted: N bytes>`
+ *   - Array at a sensitive key → `<redacted: N items>` (covers edit_file's
+ *     `edits: [{old_str, new_str}, ...]` whose content is just as sensitive
+ *     as a write body)
  *   - Truncate any other string field longer than 256 chars
- *   - Leave numbers, booleans, arrays and shallow objects intact
+ *   - Leave numbers, booleans, non-sensitive arrays and shallow objects intact
  *
- * Spec §2.11: write/append bodies and env values must never reach the log.
+ * Spec §2.11 + v0.4 §I: write/append bodies, env values, AND edit payloads
+ * must never reach the log.
  */
 export function sanitizeArgs(args: unknown): Record<string, unknown> {
   if (args === null || typeof args !== "object") return { value: args as unknown };
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
-    if (SENSITIVE_ARG_KEYS.has(k) && typeof v === "string") {
-      const bytes = Buffer.byteLength(v, "utf8");
-      out[k] = `<redacted: ${bytes} bytes>`;
-      continue;
+    if (SENSITIVE_ARG_KEYS.has(k)) {
+      if (typeof v === "string") {
+        out[k] = `<redacted: ${Buffer.byteLength(v, "utf8")} bytes>`;
+        continue;
+      }
+      if (Array.isArray(v)) {
+        out[k] = `<redacted: ${v.length} items>`;
+        continue;
+      }
     }
     if (typeof v === "string" && v.length > 256) {
       out[k] = `${v.slice(0, 256)}…<truncated ${v.length - 256} chars>`;
