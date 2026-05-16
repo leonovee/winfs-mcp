@@ -33,6 +33,13 @@ export interface ToolContext {
   config: ResolvedConfig;
   /** Per-call timeout override (max). Defaults to config.defaultTimeoutMs. */
   timeoutMs?: number;
+  /**
+   * Optional hook that returns extra audit-only metadata after the impl
+   * resolves. Merged into `args_summary` on the audit record so tools can
+   * surface totals (e.g., full files_skipped_total before response capping)
+   * without leaking them into the user-facing payload.
+   */
+  auditExtras?: (result: Result<Record<string, unknown>>) => Record<string, unknown>;
 }
 
 /**
@@ -100,11 +107,17 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
   }
 
   const duration = Date.now() - started;
+  const baseArgsSummary = sanitizeArgs(args);
+  const extraArgs = ctx.auditExtras
+    ? ctx.auditExtras(result as Result<Record<string, unknown>>)
+    : undefined;
+  const argsSummary = extraArgs ? { ...baseArgsSummary, ...extraArgs } : baseArgsSummary;
+
   if (result.ok) {
     appendAudit(ctx.config, {
       ts: new Date().toISOString(),
       tool: ctx.tool,
-      args_summary: sanitizeArgs(args),
+      args_summary: argsSummary,
       result_status: "ok",
       duration_ms: duration,
     });
@@ -113,7 +126,7 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
   appendAudit(ctx.config, {
     ts: new Date().toISOString(),
     tool: ctx.tool,
-    args_summary: sanitizeArgs(args),
+    args_summary: argsSummary,
     result_status: "error",
     error_code: result.error.code as ErrorCode,
     duration_ms: duration,

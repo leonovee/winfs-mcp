@@ -40,6 +40,18 @@ interface CopyResult extends Record<string, unknown> {
   skipped_paths: string[];
 }
 
+/**
+ * Internal handle the copy registration uses to surface the un-capped
+ * `files_skipped_total` to the audit log without polluting the user-facing
+ * response (which keeps the capped `skipped_paths` array). The map is keyed
+ * by the result object identity so concurrent copy calls don't collide.
+ */
+const skipCountByResult = new WeakMap<object, number>();
+
+export function getFullSkipCountForAudit(value: CopyResult): number | undefined {
+  return skipCountByResult.get(value);
+}
+
 interface Counters {
   bytes: number;
   files: number;
@@ -184,13 +196,18 @@ export async function copyImpl(
   const err = await copyEntry(srcReal, dstReal, args.recursive, config, counters);
   if (err) return err;
 
-  return ok({
+  const value: CopyResult = {
     copied: true,
     bytes_copied: counters.bytes,
     files_copied: counters.files,
     files_skipped: counters.skipped,
     skipped_paths: counters.skippedPaths,
-  });
+  };
+  // Carryover #2: audit gets the FULL skip count even though the response
+  // surfaces only the first 10 paths. `skipped_paths` itself is unchanged so
+  // the user-visible envelope stays the same.
+  skipCountByResult.set(value, counters.skipped);
+  return ok(value);
 }
 
 export function registerCopyTool(server: McpServer, config: ResolvedConfig): void {
@@ -221,6 +238,18 @@ Errors: EPERM_ROOT (either side), ENOENT (src), EEXIST (overwrite=false + dst ex
       },
     },
     async (args) =>
-      runTool({ tool: "copy", config }, args, (a) => copyImpl(a as Input, config)),
+      runTool(
+        {
+          tool: "copy",
+          config,
+          auditExtras: (result) => {
+            if (!result.ok) return {};
+            const full = getFullSkipCountForAudit(result.value as CopyResult);
+            return full !== undefined ? { files_skipped_total: full } : {};
+          },
+        },
+        args,
+        (a) => copyImpl(a as Input, config),
+      ),
   );
 }

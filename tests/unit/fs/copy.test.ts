@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { copyImpl } from "../../../src/tools/fs/copy.js";
+import {
+  copyImpl,
+  getFullSkipCountForAudit,
+} from "../../../src/tools/fs/copy.js";
 import { makeTempConfig, cleanupTempConfig } from "../../helpers.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
 
@@ -97,6 +100,41 @@ describe("tools/fs/copy", () => {
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error("expected error");
     expect(res.error.code).toBe("EPERM_ROOT");
+  });
+
+  it("records full files_skipped_total for audit when skipped_paths is capped at 10", async () => {
+    // Build a synthetic tree of 15 symlinks that all escape the sandbox.
+    // We skip if the host can't create symlinks (Win10 non-elevated user).
+    const { config: cfgOutside, root: outsideRoot } = await makeTempConfig();
+    try {
+      await fs.writeFile(path.join(outsideRoot, "leak.txt"), "leak", "utf8");
+      const srcDir = path.join(root, "tree");
+      await fs.mkdir(srcDir);
+      for (let i = 0; i < 15; i++) {
+        try {
+          await fs.symlink(outsideRoot, path.join(srcDir, `escape-${i}`), "dir");
+        } catch (err) {
+          const e = err as NodeJS.ErrnoException;
+          if (e?.code === "EPERM" || e?.code === "EACCES") return; // skip on locked-down hosts
+          throw err;
+        }
+      }
+      const dstDir = path.join(root, "copy");
+      const res = await copyImpl(
+        { src: srcDir, dst: dstDir, overwrite: false, recursive: true },
+        config,
+      );
+      expect(res.ok).toBe(true);
+      if (!res.ok) throw new Error("expected ok");
+      // Response array is capped at 10 even though full count is 15.
+      expect(res.value.skipped_paths.length).toBe(10);
+      expect(res.value.files_skipped).toBe(15);
+      // Audit-only sidechannel reflects the full count for telemetry.
+      expect(getFullSkipCountForAudit(res.value)).toBe(15);
+    } finally {
+      await cleanupTempConfig(outsideRoot);
+      void cfgOutside;
+    }
   });
 
   it("skips symlink-escape entries inside a recursive tree (spec amendment §B)", async () => {
