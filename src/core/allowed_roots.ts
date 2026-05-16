@@ -52,35 +52,31 @@ export async function checkAllowed(
 
   const absolute = path.resolve(inputPath);
 
+  // Always walk realpath on the deepest existing ancestor so allowed-roots
+  // can be checked even when the target itself is missing. Doing the
+  // allowed-roots check BEFORE returning ENOENT prevents existence leaks
+  // for paths outside the sandbox (spec §2.2).
   let realPath: string;
+  let targetExists = true;
   try {
     realPath = await fs.realpath(absolute);
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
-    if (e?.code !== "ENOENT" || !opts.allowMissing) {
-      if (e?.code === "ENOENT") {
-        return buildError("ENOENT", `Path does not exist: ${absolute}`);
-      }
+    if (e?.code !== "ENOENT") {
       return buildError("EIO", `realpath failed: ${e?.message ?? String(err)}`);
     }
-    // allowMissing: walk up to deepest existing ancestor, realpath it, then
-    // re-append the missing tail so the allowed-roots check still applies
-    // to a canonicalized ancestor.
+    targetExists = false;
     let ancestor = absolute;
     let tail = "";
+    let resolvedAncestor: string | undefined;
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const parent = path.dirname(ancestor);
-      if (parent === ancestor) {
-        // Hit filesystem root without finding any existing ancestor; treat
-        // the original path as unresolvable and reject.
-        return buildError("ENOENT", `No existing ancestor for: ${absolute}`);
-      }
+      if (parent === ancestor) break; // hit filesystem root
       tail = tail ? path.join(path.basename(ancestor), tail) : path.basename(ancestor);
       ancestor = parent;
       try {
-        const realAncestor = await fs.realpath(ancestor);
-        realPath = path.join(realAncestor, tail);
+        resolvedAncestor = await fs.realpath(ancestor);
         break;
       } catch (innerErr) {
         const ie = innerErr as NodeJS.ErrnoException;
@@ -88,20 +84,34 @@ export async function checkAllowed(
         return buildError("EIO", `realpath ancestor failed: ${ie?.message ?? String(innerErr)}`);
       }
     }
-  }
-
-  const normReal = path.normalize(realPath);
-  for (const root of config.resolvedAllowedRoots) {
-    if (isSameOrInside(root, normReal)) {
-      return { realPath: normReal };
+    if (resolvedAncestor === undefined) {
+      // No existing ancestor at all: synthesise a normalised absolute path
+      // so we can still answer the allowed-roots question deterministically.
+      realPath = absolute;
+    } else {
+      realPath = path.join(resolvedAncestor, tail);
     }
   }
 
-  return buildError("EPERM_ROOT", `Path is outside allowedRoots`, {
-    details: { resolved: normReal, attempted: absolute },
-    hint:
-      config.resolvedAllowedRoots.length === 0
-        ? "No allowedRoots configured. Edit config.json to add one."
-        : `allowedRoots: ${config.resolvedAllowedRoots.join(", ")}`,
-  });
+  const normReal = path.normalize(realPath);
+  let insideAllowed = false;
+  for (const root of config.resolvedAllowedRoots) {
+    if (isSameOrInside(root, normReal)) {
+      insideAllowed = true;
+      break;
+    }
+  }
+  if (!insideAllowed) {
+    return buildError("EPERM_ROOT", `Path is outside allowedRoots`, {
+      details: { resolved: normReal, attempted: absolute },
+      hint:
+        config.resolvedAllowedRoots.length === 0
+          ? "No allowedRoots configured. Edit config.json to add one."
+          : `allowedRoots: ${config.resolvedAllowedRoots.join(", ")}`,
+    });
+  }
+  if (!targetExists && !opts.allowMissing) {
+    return buildError("ENOENT", `Path does not exist: ${absolute}`);
+  }
+  return { realPath: normReal };
 }
