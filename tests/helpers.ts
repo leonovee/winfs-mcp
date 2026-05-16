@@ -12,7 +12,10 @@ import { flushAudit } from "../src/core/audit.js";
 export async function makeTempConfig(): Promise<{ config: ResolvedConfig; root: string }> {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-winfs-test-"));
   const real = await fs.realpath(base);
-  const auditPath = path.join(real, "_audit.jsonl");
+  // audit_tail enforces the `mcp-winfs/*.jsonl` shape on the resolved audit
+  // log path. Tests use the same convention so the default helper works
+  // end-to-end without a separate fixture.
+  const auditPath = path.join(real, "mcp-winfs", "audit.jsonl");
 
   const config: ResolvedConfig = {
     allowedRoots: [real],
