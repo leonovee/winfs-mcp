@@ -1,0 +1,37 @@
+{
+  "name": "mcp-winfs",
+  "version": "0.1.0",
+  "description": "MCP server for Windows 10/11 filesystem with hard-bounded timeouts, allowed-roots, atomic writes and UTF-8 invariants.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mcp-winfs": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "configs"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

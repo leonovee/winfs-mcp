@@ -1,0 +1,33 @@
+{
+  "allowedRoots": [
+    "C:\\Users\\Expert\\Desktop\\eCom",
+    "C:\\Users\\Expert\\Desktop\\AI\\ai-judge",
+    "C:\\Users\\Expert\\Dropbox\\Projects"
+  ],
+  "allowedUrlHosts": [
+    "raw.githubusercontent.com"
+  ],
+  "deniedUrlPatterns": [
+    "^https?://(127\\.|10\\.|172\\.(1[6-9]|2\\d|3[01])\\.|192\\.168\\.|169\\.254\\.|\\[::1\\]|localhost)"
+  ],
+  "shellBlocklist": [
+    "Remove-Item\\s+.*-Recurse",
+    "\\bformat\\s+[A-Za-z]:",
+    "bcdedit",
+    "reg\\s+delete\\s+HKLM",
+    "shutdown",
+    "Stop-Process\\s+.*-Force",
+    "Clear-Disk",
+    "Initialize-Disk",
+    "cipher\\s+/w"
+  ],
+  "defaultTimeoutMs": 10000,
+  "maxTimeoutMs": 60000,
+  "shellTimeoutMs": 30000,
+  "shellMaxTimeoutMs": 300000,
+  "fetchUrlMaxBytes": 5242880,
+  "fetchUrlTimeoutMs": 15000,
+  "readMaxBytes": 10485760,
+  "auditLogPath": "%LOCALAPPDATA%\\mcp-winfs\\audit.jsonl",
+  "auditLogMaxBytes": 10485760
+}

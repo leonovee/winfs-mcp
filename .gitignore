@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.vitest-cache/
+*.log
+.DS_Store
+
+# Local Claude Code state (per-machine)
+.claude/settings.local.json
+
+# OS / editor
+Thumbs.db
+.vscode/
+.idea/
