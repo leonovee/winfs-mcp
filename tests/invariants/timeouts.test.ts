@@ -56,6 +56,49 @@ describe("invariant: bounded timeouts never hang (spec §2.3)", () => {
     expect(resolveTimeoutMs(500, 10_000, 60_000)).toBe(500);
   });
 
+  it("edit_file slow disk → wrapper ETIMEDOUT, original file unchanged", async () => {
+    // Pin v0.4 §I + spec §2.3: when atomicWriteFile hangs past the wrapper
+    // deadline, the wrapper aborts with ETIMEDOUT. The on-disk file MUST
+    // still be the original (no half-written rename, no temp orphan).
+    const { config, root } = await makeTempConfig();
+    const { runTool } = await import("../../src/core/tool_wrapper.js");
+    const { editFileImpl } = await import("../../src/tools/editor/edit_file.js");
+    try {
+      const p = path.join(root, "target.txt");
+      await fs.writeFile(p, "ORIGINAL\n", "utf8");
+      const origRename = fs.rename;
+      // Mock rename to hang for 5s — longer than the tight 100ms deadline.
+      (fs as unknown as { rename: typeof origRename }).rename = (async () => {
+        await new Promise((r) => setTimeout(r, 5000));
+      }) as typeof origRename;
+      try {
+        const tightCfg = { ...config, defaultTimeoutMs: 100, maxTimeoutMs: 100 };
+        const res = await runTool(
+          { tool: "edit_file", config: tightCfg },
+          { path: p, edits: [{ old_str: "ORIGINAL", new_str: "REPLACED" }], dry_run: false },
+          (a) =>
+            editFileImpl(
+              a as {
+                path: string;
+                edits: { old_str: string; new_str: string }[];
+                dry_run: boolean;
+              },
+              tightCfg,
+            ),
+        );
+        expect(res.isError).toBe(true);
+        const parsed = JSON.parse(res.content[0]!.text);
+        expect(parsed.code).toBe("ETIMEDOUT");
+        // Original content preserved.
+        expect(await fs.readFile(p, "utf8")).toBe("ORIGINAL\n");
+      } finally {
+        (fs as unknown as { rename: typeof origRename }).rename = origRename;
+      }
+    } finally {
+      await cleanupTempConfig(root);
+    }
+  });
+
   it("grep returns partial results with reason:timeout when its own deadline expires", async () => {
     // Distinct from the wrapper-level ETIMEDOUT: grep owns its deadline so
     // the response is still ok with truncated:true rather than an error.

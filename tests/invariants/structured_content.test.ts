@@ -263,4 +263,110 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
       ["error_count", "files", "ok_count", "total"].sort(),
     );
   });
+
+  // ── v0.4 new tools ────────────────────────────────────────────────────
+
+  it("read_section: pure payload {content, range, total_bytes, encoding} (+ optional total_lines)", async () => {
+    const { readSectionImpl } = await import("../../src/tools/slicing/read_section.js");
+    const p = path.join(root, "f.txt");
+    await fs.writeFile(p, "L1\nL2\nL3\n", "utf8");
+    const res = await runTool(
+      { tool: "read_section", config },
+      { path: p, line_range: [1, 2], encoding: "utf8" },
+      (a) =>
+        readSectionImpl(
+          a as {
+            path: string;
+            line_range?: [number, number];
+            byte_range?: [number, number];
+            encoding: "utf8" | "raw";
+          },
+          config,
+        ),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    // line_range path includes total_lines.
+    expect(Object.keys(sc).sort()).toEqual(
+      ["content", "encoding", "range", "total_bytes", "total_lines"].sort(),
+    );
+  });
+
+  it("diff_files: pure payload {diff, identical, lines_added, lines_removed, format, a_label, b_label, truncated}", async () => {
+    const { diffFilesImpl } = await import("../../src/tools/slicing/diff_files.js");
+    const res = await runTool(
+      { tool: "diff_files", config },
+      { a_inline: "x\n", b_inline: "y\n", context_lines: 3, format: "unified" },
+      (a) =>
+        diffFilesImpl(
+          a as {
+            a?: string;
+            a_inline?: string;
+            b?: string;
+            b_inline?: string;
+            context_lines: number;
+            format: "unified" | "minimal";
+          },
+          config,
+        ),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(
+      [
+        "a_label",
+        "b_label",
+        "diff",
+        "format",
+        "identical",
+        "lines_added",
+        "lines_removed",
+        "truncated",
+      ].sort(),
+    );
+  });
+
+  it("edit_file: pure payload {path, replacements_made, atomic, dry_run, diff}", async () => {
+    const { editFileImpl } = await import("../../src/tools/editor/edit_file.js");
+    const p = path.join(root, "f.txt");
+    await fs.writeFile(p, "alpha\n", "utf8");
+    const res = await runTool(
+      { tool: "edit_file", config },
+      { path: p, edits: [{ old_str: "alpha", new_str: "ALPHA" }], dry_run: true },
+      (a) =>
+        editFileImpl(
+          a as {
+            path: string;
+            edits: { old_str: string; new_str: string }[];
+            dry_run: boolean;
+          },
+          config,
+        ),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(
+      ["atomic", "diff", "dry_run", "path", "replacements_made"].sort(),
+    );
+  });
+
+  it("read_since: pure payload {content, new_offset, total_bytes, mtime, truncated, file_rotated}", async () => {
+    const { readSinceImpl } = await import("../../src/tools/slicing/read_since.js");
+    const p = path.join(root, "log.txt");
+    await fs.writeFile(p, "hello\n", "utf8");
+    const res = await runTool(
+      { tool: "read_since", config },
+      { path: p, since_offset: 0 },
+      (a) =>
+        readSinceImpl(
+          a as { path: string; since_offset: number; max_bytes?: number },
+          config,
+        ),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(
+      ["content", "file_rotated", "mtime", "new_offset", "total_bytes", "truncated"].sort(),
+    );
+  });
 });
