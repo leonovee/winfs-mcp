@@ -99,4 +99,91 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
     const got = await fs.readFile(target, "utf8");
     expect(got).toBe("Привет");
   });
+
+  // ── v0.2 new tools ────────────────────────────────────────────────────
+
+  it("list_allowed_directories: pure payload, no envelope", async () => {
+    const { listAllowedDirectoriesImpl } = await import(
+      "../../src/tools/fs/list_allowed_directories.js"
+    );
+    const res = await runTool(
+      { tool: "list_allowed_directories", config },
+      {},
+      (a) => listAllowedDirectoriesImpl(a as Record<string, never>, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["allowed_roots", "allowed_url_hosts"].sort());
+  });
+
+  it("mkdir: pure payload, only declared fields", async () => {
+    const { mkdirImpl } = await import("../../src/tools/fs/mkdir.js");
+    const target = path.join(root, "new-dir");
+    const res = await runTool(
+      { tool: "mkdir", config },
+      { path: target, recursive: true },
+      (a) =>
+        mkdirImpl(a as { path: string; recursive: boolean }, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["created", "path"]);
+  });
+
+  it("move: pure payload {moved, src, dst}", async () => {
+    const { moveImpl } = await import("../../src/tools/fs/move.js");
+    const src = path.join(root, "from.txt");
+    const dst = path.join(root, "to.txt");
+    await fs.writeFile(src, "x", "utf8");
+    const res = await runTool(
+      { tool: "move", config },
+      { src, dst, overwrite: false },
+      (a) =>
+        moveImpl(a as { src: string; dst: string; overwrite: boolean }, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["dst", "moved", "src"]);
+  });
+
+  it("copy: pure payload (no envelope) with counters", async () => {
+    const { copyImpl } = await import("../../src/tools/fs/copy.js");
+    const src = path.join(root, "from.txt");
+    const dst = path.join(root, "copy.txt");
+    await fs.writeFile(src, "x", "utf8");
+    const res = await runTool(
+      { tool: "copy", config },
+      { src, dst, overwrite: false, recursive: true },
+      (a) =>
+        copyImpl(
+          a as { src: string; dst: string; overwrite: boolean; recursive: boolean },
+          config,
+        ),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(
+      ["bytes_copied", "copied", "files_copied", "files_skipped", "skipped_paths"].sort(),
+    );
+    expect(sc).not.toHaveProperty("ok");
+  });
+
+  it("read_multiple_files: pure payload {files, total, ok_count, error_count}", async () => {
+    const { readMultipleFilesImpl } = await import(
+      "../../src/tools/fs/read_multiple_files.js"
+    );
+    const a = path.join(root, "a.txt");
+    await fs.writeFile(a, "abc", "utf8");
+    const res = await runTool(
+      { tool: "read_multiple_files", config },
+      { paths: [a] },
+      (a2) =>
+        readMultipleFilesImpl(a2 as { paths: string[] }, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(
+      ["error_count", "files", "ok_count", "total"].sort(),
+    );
+  });
 });
