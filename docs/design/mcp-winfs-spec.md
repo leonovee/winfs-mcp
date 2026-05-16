@@ -859,3 +859,43 @@ Output: ровно `{allowed_roots: string[], allowed_url_hosts: string[]}`. **�
 **E. Existing-target idempotence для mkdir.**
 
 `mkdir(path, {recursive: true})` на существующей директории возвращает `{created: false, path}` без ошибки. Это согласуется с POSIX-семантикой `mkdir -p`. Только `recursive: false` + path существует → `EEXIST`.
+
+### 2026-05-16 — v0.3 envelopes + move cross-volume opt-in + copy audit telemetry
+
+**Motivation.** §4.3 и §4.8 определяют outputs нескольких search/system tools как `Array<...>`. MCP V1 SDK требует, чтобы `outputSchema` был объектом (JSON Schema `type: "object"`), поэтому фактический wire-shape для array-результатов — envelope. Зафиксируем шаблон явно, формализуем v0.3 move/copy расширения и закроем три open question из v0.2 acceptance report.
+
+**F. Envelope для tools с array-выходом.**
+
+Для tools, у которых §4 определяет `Output: Array<T>`, реальный schema — `{<plural>: T[], total: number, ...flags}`. Это применяется единообразно:
+
+| Tool | §4 nominal | Wire shape (envelope) |
+|---|---|---|
+| `read_multiple_files` | `Array<{path, content?, error?}>` | `{files, total, ok_count, error_count}` |
+| `glob` | `Array<string>` | `{matches: string[], total, truncated}` |
+| `grep` | `Array<{file, line, ...}>` | `{matches, total, truncated, reason?}` |
+| `audit_tail` | `Array<{ts, tool, ...}>` | `{entries, total}` |
+
+Правила envelope:
+- Плюральное имя массива (`files`/`matches`/`entries`) — first, потому что это смысловой payload.
+- `total: number` — всегда `array.length`. Удобно для UI без `.length` дереференса.
+- Flags: `truncated`, `ok_count`, `error_count`, `reason` — только если они *часть контракта* tool, а не cosmetic. Не добавлять `success: true` или `tool: "..."` (envelope антипаттерн из v0.1.1 backlog #1).
+- `additionalProperties: false` (через `z.object(...).strict()`) — для предотвращения envelope-расползания.
+
+Если будущему tool из §4 нужно вернуть массив без полезных flags, envelope сводится к `{<plural>, total}`.
+
+**G. `move` cross-volume opt-in fallback.**
+
+Дополняет амендмент A (v0.2): `move` теперь принимает `allow_cross_volume: boolean` (default `false`).
+
+- `false` (default) + EXDEV → `EIO` с `errno: "EXDEV"` в details, как в v0.2. Поведение неизменно для существующих callers.
+- `true` + EXDEV → `copyImpl(src, dst, {recursive:true})` затем `fs.rm(src, {recursive:true})`. Операция **не атомарна** — возможна race-окно после успешного copy, до завершения delete, где src и dst оба существуют.
+
+Response envelope расширен полем `atomic: boolean`:
+- `atomic: true` — успешный `fs.rename` (single-volume).
+- `atomic: false` — fallback copy+delete сработал, источник удалён.
+
+Если copy в fallback падает, ошибка возвращается as-is (с code из copy). Если copy успешен, но delete src падает (rare: permission, lock) → `EIO` с `phase: "delete"` в details; destination содержит данные, source остался — caller должен решить дальнейшую судьбу.
+
+**H. `copy` symlink-skip telemetry в audit.**
+
+Response для `copy` уже cap'ает `skipped_paths` до 10 entries (per амендмент B), но `files_skipped` всегда отражает full count. v0.3 добавляет в audit log дополнительный full-count бит: `args_summary.files_skipped_total` записывается даже если response capped. Реализация через `auditExtras` hook в `tool_wrapper.ts`, который merge'ит metadata из impl в audit-only слой без exposure в user-visible payload. Чисто observability-fix; user-facing response unchanged.
