@@ -899,3 +899,53 @@ Response envelope расширен полем `atomic: boolean`:
 **H. `copy` symlink-skip telemetry в audit.**
 
 Response для `copy` уже cap'ает `skipped_paths` до 10 entries (per амендмент B), но `files_skipped` всегда отражает full count. v0.3 добавляет в audit log дополнительный full-count бит: `args_summary.files_skipped_total` записывается даже если response capped. Реализация через `auditExtras` hook в `tool_wrapper.ts`, который merge'ит metadata из impl в audit-only слой без exposure в user-visible payload. Чисто observability-fix; user-facing response unchanged.
+
+### 2026-05-16 — v0.4 Editor + Slicing surface (§I–§L)
+
+**Motivation.** §4.4 `edit_file` и §4.5 `read_section` / `read_since` / `diff_files` определяют tool surface на высоком уровне, оставляя поведенческие развилки (что считать "уникальным", как считать строки, что делать при rotation log файла, как обрабатывать inline-input для diff). v0.4 фиксирует эти решения детерминистически — четыре амендмента ниже.
+
+**Pivot для `read_section`.** §4.5 описывает marker-based slicing (md-headings или regex anchors). v0.4 реализация **отходит от этой схемы** в пользу range-based (line_range / byte_range) по следующим причинам:
+
+- Marker-based blurs into `grep` territory — поиск по контенту это уже отдельный tool.
+- Range-based композируется с `read_multiple_files` semantics (`range: [start, end]`), сохраняя единый ментальный шаблон.
+- Marker positioning внутри документа нестабилен между правками (Claude отредактировал заголовок → следующий `read_section` промазал), что делает marker-output непригодным для round-trip workflow.
+- Marker-based может вернуться как отдельный tool `read_marked_section` в v0.5+, если real use surfaces need.
+
+**I. `edit_file` semantics.**
+
+- **Uniqueness invariant.** Каждый `old_str` в `edits[]` ДОЛЖЕН встречаться ровно 1 раз в текущем буфере. 0 occurrences → `EUNIQUE` с `details: {edit_index, occurrences: 0}`. 2+ → `EUNIQUE` с `details: {edit_index, occurrences: <count>}`. Не используем `ENOMATCH` — кодов слишком много, `EUNIQUE` покрывает оба случая через `occurrences` поле.
+- **Sequential application.** Edits применяются по порядку к in-memory буферу. Edit N проверяется против буфера ПОСЛЕ edits 0..N-1. Это корректное поведение, не баг: если `edit[0]` убирает строку, на которую таргетится `edit[1]`, второй edit получает `EUNIQUE` (occurrences=0).
+- **`dry_run: true` не трогает диск.** Никакого temp файла, никакого `fsync`. Implementation forks до atomic-write этапа.
+- **`diff` field в response всегда populated.** Both `dry_run` и real edits — unified diff (3 lines context) pre/post буфера. Caller всегда имеет visibility в "что было бы записано".
+- **`atomic: true` всегда.** Same atomic-write path как `write` (temp + fsync + rename). Mirror'им `move` v0.2.x решение exposed-explicitly-even-when-tautological — future failure mode может перевернуть это значение.
+- **Audit redaction.** `args_summary` записывает `{path, edits_count, dry_run, bytes_before, bytes_after}` — никаких `old_str`/`new_str` content (continuation of `content`-field redaction principle).
+- **Refused edge cases.** Empty `old_str` → `EINVAL` (защита от accidental whole-file overwrite). Binary file → `EENCODING`. `edit_file` не создаёт файл — `ENOENT` если path отсутствует (use `write` instead).
+
+**J. `read_section` slice semantics.**
+
+- **Mutually exclusive selectors.** Exactly one of `line_range: [start, end]` / `byte_range: [start, end]` required. Both или neither → `EINVAL`.
+- **Line counting.** Split on `\n` без normalization. `\r` остаётся прикреплённым к строке. `"a\nb\n"` = 2 строки, `"a\nb"` = 2 строки, `"a\nb\nc"` = 3 строки.
+- **UTF-8 boundary trim.** При `byte_range` + `encoding: "utf8"`, если границы slice падают в середину multi-byte sequence, slice сжимается с обеих сторон до largest valid UTF-8 substring; response получает `adjusted: true`.
+- **Interior decode failure ≠ boundary trim.** Если slice содержит invalid UTF-8 в *interior* (не на границах) → `EENCODING`. Boundary trimming — это `adjusted: true`, не error.
+- **Output envelope.** `{ content, range: {kind: "line"|"byte", start, end}, total_lines?, total_bytes, adjusted?, encoding }`. `total_lines` присутствует только для `line_range` (требует full scan). `total_bytes` всегда — cheap via `fstat`.
+- **Errors.** `EPERM_ROOT`, `ENOENT`, `EISDIR`, `EINVAL` (mutual exclusion / range bounds), `ETOOLARGE` (slice > `config.readMaxBytes`), `EENCODING` (interior corruption), `ETIMEDOUT`.
+
+**K. `read_since` rotation semantics.**
+
+- **Steady-state.** `since_offset === total_bytes` → empty `content`, `new_offset === since_offset`, `truncated: false`, `file_rotated: false`. Poll-loop friendly.
+- **Append.** `total_bytes > since_offset` → reads delta, returns up to `max_bytes` (default 64 KB, hard cap 1 MB). `truncated: true` if delta exceeded cap.
+- **Rotation detection.** `total_bytes < since_offset` → `file_rotated: true`, response содержит **whole file** content, `new_offset === total_bytes`. Caller acknowledges by passing new offset on next call.
+- **UTF-8 boundary advance.** Если `since_offset` падает mid-multibyte, чтение продвигается вперёд до next valid UTF-8 boundary (max 4 байта). Skipped bytes silent. Если skip > 4 → real corruption signal → `EENCODING` с `details: {skipped_bytes}`.
+- **Output envelope.** `{ content, new_offset, total_bytes, mtime, truncated, file_rotated }`.
+- **Errors.** `EPERM_ROOT`, `ENOENT`, `EISDIR`, `EINVAL` (negative/non-integer offset), `EENCODING`, `ETIMEDOUT`.
+
+**L. `diff_files` text-only с inline support.**
+
+- **Inline-or-path per side.** Exactly one of `a` / `a_inline` required; same для `b`. Both или neither (per side) → `EINVAL`.
+- **BOM stripping.** UTF-8 BOM на любой стороне strip'ается до diff — никогда не leak'ает в output.
+- **Binary input → `EENCODING`.** `diff_files` text-only (UTF-16 BOM, NUL byte → reject).
+- **`format` options.** `"unified"` (default, full unified diff с `context_lines` default 3, max 10) и `"minimal"` (changed-line counts + first 20 changed lines). `"minimal"` для fast same/different checks без полной diff передачи.
+- **`identical: true`** iff `diff === ""` and `lines_added === 0` and `lines_removed === 0`.
+- **`a_label` / `b_label`.** Basename для file inputs, `"<inline>"` для inline. Surfaced в response для audit-trail.
+- **Output envelope.** `{ diff, identical, lines_added, lines_removed, format, a_label, b_label, truncated }`. `truncated: true` если diff превысил `config.maxDiffBytes` (новый knob, default 256 KB).
+- **Errors.** `EPERM_ROOT` (any side), `ENOENT`, `EISDIR` per side, `EINVAL` (mutex), `EENCODING` (binary), `ETOOLARGE` (input > `readMaxBytes`).
