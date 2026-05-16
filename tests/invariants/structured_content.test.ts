@@ -130,20 +130,28 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
     expect(Object.keys(sc).sort()).toEqual(["created", "path"]);
   });
 
-  it("move: pure payload {moved, src, dst}", async () => {
+  it("move: pure payload {moved, src, dst, atomic}", async () => {
     const { moveImpl } = await import("../../src/tools/fs/move.js");
     const src = path.join(root, "from.txt");
     const dst = path.join(root, "to.txt");
     await fs.writeFile(src, "x", "utf8");
     const res = await runTool(
       { tool: "move", config },
-      { src, dst, overwrite: false },
+      { src, dst, overwrite: false, allow_cross_volume: false },
       (a) =>
-        moveImpl(a as { src: string; dst: string; overwrite: boolean }, config),
+        moveImpl(
+          a as {
+            src: string;
+            dst: string;
+            overwrite: boolean;
+            allow_cross_volume: boolean;
+          },
+          config,
+        ),
     );
     expect(res.isError).toBeUndefined();
     const sc = res.structuredContent as Record<string, unknown>;
-    expect(Object.keys(sc).sort()).toEqual(["dst", "moved", "src"]);
+    expect(Object.keys(sc).sort()).toEqual(["atomic", "dst", "moved", "src"]);
   });
 
   it("copy: pure payload (no envelope) with counters", async () => {
@@ -166,6 +174,75 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
       ["bytes_copied", "copied", "files_copied", "files_skipped", "skipped_paths"].sort(),
     );
     expect(sc).not.toHaveProperty("ok");
+  });
+
+  // ── v0.3 new tools ────────────────────────────────────────────────────
+
+  it("glob: pure payload {matches, total, truncated}", async () => {
+    const { globImpl } = await import("../../src/tools/search/glob.js");
+    await fs.writeFile(path.join(root, "a.txt"), "x", "utf8");
+    const res = await runTool(
+      { tool: "glob", config },
+      { pattern: path.join(root, "*.txt") },
+      (a) => globImpl(a as { pattern: string }, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["matches", "total", "truncated"]);
+  });
+
+  it("read_json: pure payload {data, size_bytes}", async () => {
+    const { readJsonImpl } = await import("../../src/tools/search/read_json.js");
+    const p = path.join(root, "ok.json");
+    await fs.writeFile(p, '{"a":1}', "utf8");
+    const res = await runTool(
+      { tool: "read_json", config },
+      { path: p },
+      (a) => readJsonImpl(a as { path: string }, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["data", "size_bytes"]);
+  });
+
+  it("grep: pure payload {matches, total, truncated} (no reason on clean run)", async () => {
+    const { grepImpl } = await import("../../src/tools/search/grep.js");
+    await fs.writeFile(path.join(root, "a.txt"), "alpha\nbeta\n", "utf8");
+    const res = await runTool(
+      { tool: "grep", config },
+      {
+        path_glob: path.join(root, "*.txt"),
+        pattern: "alpha",
+        case_sensitive: false,
+        context_lines: 0,
+      },
+      (a) =>
+        grepImpl(
+          a as {
+            path_glob: string;
+            pattern: string;
+            case_sensitive: boolean;
+            context_lines: number;
+          },
+          config,
+          5000,
+        ),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["matches", "total", "truncated"]);
+  });
+
+  it("audit_tail: pure payload {entries, total}", async () => {
+    const { auditTailImpl } = await import("../../src/tools/system/audit_tail.js");
+    const res = await runTool(
+      { tool: "audit_tail", config },
+      { n: 5 },
+      (a) => auditTailImpl(a as { n?: number }, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["entries", "total"]);
   });
 
   it("read_multiple_files: pure payload {files, total, ok_count, error_count}", async () => {
