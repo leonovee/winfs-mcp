@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "winfs-mcp",
   "version": "0.3.0",
   "description": "MCP server for Windows 10/11 filesystem with hard-bounded timeouts, allowed-roots, atomic writes and UTF-8 invariants.",
