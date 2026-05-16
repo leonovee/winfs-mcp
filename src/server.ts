@@ -14,6 +14,10 @@ import { registerGlobTool } from "./tools/search/glob.js";
 import { registerReadJsonTool } from "./tools/search/read_json.js";
 import { registerGrepTool } from "./tools/search/grep.js";
 import { registerAuditTailTool } from "./tools/system/audit_tail.js";
+import { registerReadSectionTool } from "./tools/slicing/read_section.js";
+import { registerDiffFilesTool } from "./tools/slicing/diff_files.js";
+import { registerReadSinceTool } from "./tools/slicing/read_since.js";
+import { registerEditFileTool } from "./tools/editor/edit_file.js";
 
 export function createServer(config: ResolvedConfig): McpServer {
   const server = new McpServer({
@@ -40,6 +44,12 @@ export function createServer(config: ResolvedConfig): McpServer {
   registerReadJsonTool(server, config);
   registerGrepTool(server, config);
   registerAuditTailTool(server, config);
+
+  // v0.4 editor + slicing
+  registerReadSectionTool(server, config);
+  registerDiffFilesTool(server, config);
+  registerReadSinceTool(server, config);
+  registerEditFileTool(server, config);
 
   return server;
 }
