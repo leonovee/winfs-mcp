@@ -5,9 +5,10 @@ Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
 UTF-8-no-BOM invariant.
 
-**Status:** v0.3 — 14 tools (5 core from v0.1 + 5 mutations / batch /
-introspection from v0.2 + 4 search / self-recovery from v0.3) and the
-full core/ invariant layer. v0.4+ adds the remaining 15 tools per
+**Status:** v0.4 — 18 tools (5 core from v0.1 + 5 mutations / batch /
+introspection from v0.2 + 4 search / self-recovery from v0.3 + 4
+editor / slicing / diff / tail from v0.4) and the full core/ invariant
+layer. v0.5+ adds the remaining 11 tools per
 `docs/design/mcp-winfs-spec.md` §7.
 
 ## Install
@@ -74,7 +75,7 @@ Use absolute paths for both `dist/index.js` and the config. **Do not use
 Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 `list`, `stat`) should appear in the tools list.
 
-## Tools (v0.3)
+## Tools (v0.4)
 
 ### Core FS (v0.1)
 
@@ -104,6 +105,15 @@ Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 | `grep`        | yes       | Regex search across files matching a glob, with `case_sensitive` flag, `context_lines` (0..10) and `max_matches`. Pattern compiled with `new RegExp` — no `eval`. Deadline returns partial results with `{truncated:true, reason:"timeout"}` instead of erroring. |
 | `read_json`   | yes       | Read + `JSON.parse` in one call. Distinct `EBADJSON` code for parse failures (with line / column / snippet). Inherits `read`'s allowedRoots, BOM and `ETOOLARGE` semantics. |
 | `audit_tail`  | yes       | Tail the structured audit log for self-recovery after context loss. Reads from `%LOCALAPPDATA%\mcp-winfs\audit.jsonl` (the only legitimate exception to allowedRoots — gated by an absolute-path check, `.jsonl` extension check on both configured and `realpath`-resolved paths, and `fstat` against the bound file descriptor). Default 50, hard cap 500. |
+
+### Editor + slicing + diff + tail (v0.4)
+
+| Tool           | Read-only | What it does                                                                |
+|----------------|-----------|-----------------------------------------------------------------------------|
+| `read_section` | yes       | Slice a file by `line_range: [start, end]` (1-based) OR `byte_range: [start, end]` (0-based). UTF-8 byte ranges trim to valid boundaries (`adjusted: true`); `encoding: "raw"` returns base64. |
+| `diff_files`   | yes       | Unified textual diff between two sides. Each side is exactly one of: file path or inline string. `format: "minimal"` returns a summary + first 20 changed lines. UTF-8 BOM stripped; binary → EENCODING. |
+| `edit_file`    | no        | Atomic find-and-replace via `{old_str, new_str}` edits. Each `old_str` MUST appear exactly once (EUNIQUE on 0 or 2+). `dry_run: true` returns the diff without touching disk. Atomic write (temp + fsync + rename). |
+| `read_since`   | yes       | Incremental tail. Caller passes a byte offset from a prior call, gets the delta. Rotation detected when the file shrank (`file_rotated: true`, returns whole file). UTF-8 boundary advance ≤ 3 bytes silent. |
 
 Every tool returns pure-payload `structuredContent` that matches its
 declared `outputSchema` 1:1 (no `ok` / `tool` envelope — see [v0.1.1
@@ -160,17 +170,19 @@ npm test          # vitest run
 npm run test:watch
 ```
 
-v0.3 ships 120 tests: 77 unit (per-tool happy path + every error code
-across 14 tools) and 43 invariant (UTF-8 roundtrip, junction/`..` escape,
-timeout abort + grep partial-result, atomic-write integrity, audit
-redaction, both-roots check for mutations, structuredContent shape
-across all 14 tools, audit_tail privileged-read boundary).
+v0.4 ships 179 tests in 33 files: per-tool happy path + every error code
+across 18 tools, plus invariants (UTF-8 roundtrip, junction/`..` escape,
+timeout abort + grep partial-result + edit_file ETIMEDOUT, atomic-write
+integrity + edit_file dry-run-no-temp / rename-failure-no-leak, audit
+redaction, both-roots check for mutations, structuredContent shape across
+all 18 tools, audit_tail privileged-read boundary + TOCTOU close).
 
 ## Acceptance reports
 
 - v0.1: [`docs/v0.1-acceptance.md`](docs/v0.1-acceptance.md)
 - v0.2: [`docs/v0.2-acceptance.md`](docs/v0.2-acceptance.md)
 - v0.3: [`docs/v0.3-acceptance.md`](docs/v0.3-acceptance.md)
+- v0.4: [`docs/v0.4-acceptance.md`](docs/v0.4-acceptance.md)
 
 ## Roadmap
 
@@ -179,7 +191,7 @@ across all 14 tools, audit_tail privileged-read boundary).
 - ✅ **v0.1** — `read`, `write`, `append`, `list`, `stat`
 - ✅ **v0.2** — `mkdir`, `move`, `copy`, `read_multiple_files`, `list_allowed_directories`
 - ✅ **v0.3** — `grep`, `glob`, `read_json`, `audit_tail`
-- **v0.4** — `edit_file` (with `dry_run`), `read_section`, `read_since`, `diff_files`
+- ✅ **v0.4** — `read_section`, `diff_files`, `edit_file` (with `dry_run`), `read_since`
 - **v0.5** — git read-only (`log`, `status`, `diff`, `show`, `blame`)
 - **v0.6** — `execute_command`, `run_python`, `run_pytest`
 - **v0.7** — `find_command`, `check_env`, `fetch_url`

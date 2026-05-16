@@ -3,6 +3,107 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.4.0] — 2026-05-16
+
+Editor + slicing + diff + incremental tail. Closes spec §7 v0.4 milestone:
+"Claude can modify code without dropping to a shell, slice large files
+without blowing context, watch logs/output incrementally, and compare
+two versions textually."
+
+### Added — new tools (4)
+
+- **`read_section`** — Slice a file by `line_range: [start, end]` (1-based
+  inclusive) OR `byte_range: [start, end]` (0-based inclusive). Exactly
+  one selector. Byte-range slices on UTF-8 text trim to the largest valid
+  UTF-8 substring within the requested range (`adjusted: true` surfaced).
+  `encoding: "raw"` returns the exact byte slice as base64. Line counting
+  splits on `\n` without normalization; `\r` stays attached. Pivot from
+  spec §4.5's marker-based design recorded in spec amendment §J.
+- **`diff_files`** — Unified textual diff between two sides. Each side is
+  exactly one of `a` / `a_inline` (and `b` / `b_inline`). Two formats:
+  `unified` (default, full unified diff with `context_lines` 0..10) and
+  `minimal` (summary header + first 20 changed lines). UTF-8 BOM stripped
+  before diff; binary input → `EENCODING`. Diff size capped at the new
+  `config.maxDiffBytes` knob (default 256 KB) — oversize → `truncated`.
+- **`edit_file`** — Atomic find-and-replace with `dry_run` and a strict
+  uniqueness invariant. Each `old_str` MUST appear exactly once in the
+  current in-memory buffer (0 occurrences OR 2+ → `EUNIQUE` with
+  `details.{edit_index, occurrences}`). Edits apply sequentially; edit N
+  is checked against the buffer AFTER edits 0..N-1. `dry_run: true`
+  validates + returns the unified diff without touching disk (no `.tmp`
+  artifact). Writes go through the existing atomic-write path
+  (`temp + fsync + rename`). Audit log records
+  `{path, edits_count, dry_run, bytes_before, bytes_after}` — `old_str` /
+  `new_str` content is NEVER persisted.
+- **`read_since`** — Incremental tail. Caller passes a byte offset from a
+  prior call and receives the delta. Rotation detected when
+  `total_bytes < since_offset`: response carries `file_rotated: true` and
+  returns the whole (smaller) file with `new_offset === total_bytes`.
+  UTF-8 boundary: if `since_offset` lands mid-multibyte, the read
+  advances forward to the next valid boundary (silent skip ≤ 3 bytes);
+  > 3 bytes skipped → `EENCODING`. Default chunk cap 64 KB, hard cap 1 MB.
+
+### Added — infrastructure
+
+- **`diff` npm dependency** (`^7.0.0`) — well-tested unified-diff library
+  used by `diff_files` and `edit_file`'s `diff` field. No shell-out.
+- **`config.maxDiffBytes`** — new strict-Zod config knob (default 256 KB)
+  capping the `diff_files` output. Test helpers updated.
+- **`audit.SENSITIVE_ARG_KEYS` extended** with `edits` (array-aware) +
+  `a_inline` / `b_inline` (string-aware). `sanitizeArgs` now redacts
+  sensitive arrays as `<redacted: N items>` so `edit_file`'s edits never
+  leak through the audit log.
+
+### Spec amendments
+
+`2026-05-16 — v0.4 Editor + Slicing surface (§I–§L)`:
+
+- **§I — `edit_file` semantics.** Pins uniqueness invariant, sequential
+  application, dry-run-doesn't-touch-disk, diff field always populated,
+  audit redaction of `old_str` / `new_str`.
+- **§J — `read_section` slice semantics.** Pins mutual exclusion of
+  selectors, line-counting rules, UTF-8 boundary trim with `adjusted`
+  vs interior-decode `EENCODING`. Records the pivot from §4.5's
+  marker-based design to range-based (rationale: marker-based blurs
+  into `grep` territory; range-based composes with `read_multiple_files`).
+- **§K — `read_since` rotation semantics.** Pins steady-state /
+  append / rotation paths, UTF-8 boundary advance (≤ 3 bytes silent,
+  > 3 bytes = `EENCODING`).
+- **§L — `diff_files` text-only with inline support.** Pins
+  inline-or-path mutex per side, BOM stripping, binary → `EENCODING`,
+  `unified` vs `minimal` formats.
+
+### Added — tests (+50 net new, 179 total)
+
+- `tests/unit/slicing/read_section.test.ts` — 11 tests (line / byte
+  ranges, both / neither selector → EINVAL, line_range past EOF,
+  UTF-8 boundary trim, raw encoding, ETOOLARGE, EPERM_ROOT, ENOENT,
+  EISDIR).
+- `tests/unit/slicing/diff_files.test.ts` — 11 tests (identical,
+  file vs inline, inline vs inline, mutex EINVAL, both empty, one
+  empty, BOM stripped, binary EENCODING, minimal format, truncated).
+- `tests/unit/editor/edit_file.test.ts` — 13 tests (single + multi
+  edit, dry_run, EUNIQUE 0× and 2+×, sequential cascade EUNIQUE,
+  EPERM_ROOT, ENOENT, EISDIR, EENCODING, BOM round-trip, identity
+  edit, audit extras).
+- `tests/unit/slicing/read_since.test.ts` — 8 tests (steady-state,
+  append, truncated, rotation, UTF-8 boundary advance, EPERM_ROOT,
+  ENOENT, mtime).
+- `tests/invariants/edit_file_atomic.test.ts` (new) — 2 cases pinning
+  the spec §I invariants: `dry_run` produces no `.tmp` artifact; a
+  mocked `fs.rename` failure leaves the original file intact and the
+  temp cleaned up.
+- `tests/invariants/structured_content.test.ts` — extended with the 4
+  new tools (now 17 cases total).
+- `tests/invariants/timeouts.test.ts` — added an `edit_file` deadline
+  case (mocked slow `fs.rename` + 100 ms wrapper deadline →
+  `ETIMEDOUT`, original file unchanged).
+
+### Tests
+
+- 179 passing total in 33 files (was 129 in 28 files at v0.3.3).
+  +50 net new tests; +5 new files.
+
 ## [0.3.3] — 2026-05-16
 
 DeepSeek post-v0.3.2 review polish. All P3 items, `audit_tail`-scoped.
