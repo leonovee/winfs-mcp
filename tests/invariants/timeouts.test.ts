@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
 import { withTimeout, resolveTimeoutMs } from "../../src/core/timeouts.js";
 import { ok, type Result } from "../../src/core/errors.js";
+import { grepImpl } from "../../src/tools/search/grep.js";
+import { makeTempConfig, cleanupTempConfig } from "../helpers.js";
 
 describe("invariant: bounded timeouts never hang (spec §2.3)", () => {
   it("resolves with ETIMEDOUT when task exceeds deadline", async () => {
@@ -50,5 +54,32 @@ describe("invariant: bounded timeouts never hang (spec §2.3)", () => {
     expect(resolveTimeoutMs(0, 10_000, 60_000)).toBe(10_000);
     expect(resolveTimeoutMs(-5, 10_000, 60_000)).toBe(10_000);
     expect(resolveTimeoutMs(500, 10_000, 60_000)).toBe(500);
+  });
+
+  it("grep returns partial results with reason:timeout when its own deadline expires", async () => {
+    // Distinct from the wrapper-level ETIMEDOUT: grep owns its deadline so
+    // the response is still ok with truncated:true rather than an error.
+    const { config, root } = await makeTempConfig();
+    try {
+      for (let i = 0; i < 50; i++) {
+        await fs.writeFile(path.join(root, `f${i}.txt`), "needle\n".repeat(10), "utf8");
+      }
+      const res = await grepImpl(
+        {
+          path_glob: path.join(root, "*.txt"),
+          pattern: "needle",
+          case_sensitive: false,
+          context_lines: 0,
+        },
+        config,
+        1, // 1ms — expires before walk finishes.
+      );
+      expect(res.ok).toBe(true);
+      if (!res.ok) throw new Error("expected ok");
+      expect(res.value.truncated).toBe(true);
+      expect(res.value.reason).toBe("timeout");
+    } finally {
+      await cleanupTempConfig(root);
+    }
   });
 });
