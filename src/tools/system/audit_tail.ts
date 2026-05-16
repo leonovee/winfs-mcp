@@ -4,15 +4,11 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
-import { buildError, ok, type Result } from "../../core/errors.js";
+import { buildError, ok, type Result, type StructuredError } from "../../core/errors.js";
 
 const HARD_CAP = 500;
 const DEFAULT_N = 50;
-
-/** Reverse-read chunk size — bounded memory, bounded I/O. */
 const READ_CHUNK_BYTES = 256 * 1024;
-/** Absolute cap on total bytes read from the audit log per call. Prevents a
- *  large log + small `n` from loading everything into memory. */
 const MAX_TOTAL_READ_BYTES = 64 * 1024 * 1024;
 
 const InputShape = {
@@ -48,94 +44,316 @@ interface AuditTailResult extends Record<string, unknown> {
 }
 
 /**
- * Guard against `config.resolvedAuditLogPath` being pointed at an arbitrary
- * file (config injection / malicious override). Lexical-only check: filename
- * ends with `.jsonl` AND parent directory basename is `mcp-winfs`.
+ * Audit log path validation. After v0.3.2 (kimi P1.3) the check is JUST a
+ * `.jsonl` extension match — the v0.3.0/v0.3.1 parent-directory-name layer
+ * was removed.
  *
- * The lexical check is necessary but not sufficient — a symlink at a
- * legitimate-shape path can still resolve to an arbitrary file. Callers MUST
- * additionally `fs.realpath()` the path and re-validate the resolved target
- * with this same function. See `resolveAuditLogPath` below.
+ * Threat model:
+ *   - `InputSchema` has no `path` argument. A user cannot inject a target.
+ *   - The configured `resolvedAuditLogPath` comes from operator config (or
+ *     the %LOCALAPPDATA%\mcp-winfs\ default). The only attack surface is
+ *     config injection + filesystem-level TOCTOU.
+ *
+ * Defenses, in layered order:
+ *   1. Lexical `.jsonl` extension check on the configured path (config
+ *      injection can't point at /etc/passwd or system.ini).
+ *   2. `fs.realpath` round-trip to canonicalise away symlinks/junctions.
+ *   3. Re-check the `.jsonl` extension on the resolved path (pre-resolve
+ *      junction swap to a non-`.jsonl` target is caught here).
+ *   4. `fs.open` the RESOLVED path — file descriptor is bound to an inode
+ *      at this moment; any subsequent junction swap of the configured
+ *      path cannot redirect reads (kimi P1.2 TOCTOU close).
+ *   5. `fileHandle.stat()` — confirms the bound inode is a regular file.
+ *
+ * The parent-directory name was defense-in-depth, not primary. Removing it
+ * frees the project name from being baked into a security invariant and
+ * eliminates the future-rename failure mode the kimi review flagged.
  */
-export function isAuditLogPathLegitimate(resolvedAuditLogPath: string): boolean {
-  const norm = path.normalize(resolvedAuditLogPath);
-  if (!norm.toLowerCase().endsWith(".jsonl")) return false;
-  const parent = path.basename(path.dirname(norm));
-  return parent.toLowerCase() === "mcp-winfs";
+export function isAuditLogPathLegitimate(p: string): boolean {
+  return path.normalize(p).toLowerCase().endsWith(".jsonl");
 }
 
 /**
- * Lexical shape check + realpath round-trip. The realpath step catches
- * symlinks / NTFS junctions placed at a legitimate-shape path that resolve
- * to an arbitrary file outside the audit log convention. Codex review P1.
+ * Race an unsignalled fs op against an AbortSignal. On abort, rejects with
+ * an AbortError; the underlying op continues, and if it eventually succeeds
+ * `onAbortCleanup` is invoked so leaked resources (FileHandles) can be
+ * released. Without this wrapper, `fs.open` / `fs.realpath` on a slow disk
+ * (OneDrive-synced %LOCALAPPDATA%, network mount) can hang past the tool
+ * wrapper's deadline before it can react — kimi P2.2.
  */
-async function resolveAuditLogPath(
+async function abortable<T>(
+  op: Promise<T>,
+  signal: AbortSignal | undefined,
+  onAbortCleanup?: (value: T) => Promise<void> | void,
+): Promise<T> {
+  if (!signal) return op;
+  if (signal.aborted) {
+    op.then((v) => onAbortCleanup?.(v)).catch(() => {});
+    throw Object.assign(new Error("aborted"), { name: "AbortError" });
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      op.then((v) => onAbortCleanup?.(v)).catch(() => {});
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    op.then((v) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      resolve(v);
+    }).catch((e) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      reject(e);
+    });
+  });
+}
+
+function isAbortError(err: unknown): boolean {
+  return (err as Error)?.name === "AbortError";
+}
+
+type OpenAuditLog =
+  | { kind: "open"; handle: import("node:fs/promises").FileHandle; resolved: string }
+  | { kind: "missing" }
+  | { kind: "error"; error: StructuredError };
+
+/**
+ * Lexical check → realpath → re-check → open RESOLVED → fstat.
+ * Returns a file handle bound to the inode at open time, plus the canonical
+ * resolved path. Caller is responsible for closing the handle.
+ *
+ * On `ENOENT` (audit log not written yet) returns `{ kind: "missing" }` —
+ * downstream treats this as an empty tail.
+ */
+async function openAuditLog(
   configuredPath: string,
-): Promise<{ realPath: string } | { error: ReturnType<typeof buildError> }> {
+  signal: AbortSignal | undefined,
+): Promise<OpenAuditLog> {
   if (!isAuditLogPathLegitimate(configuredPath)) {
     return {
+      kind: "error",
       error: buildError(
         "EPERM_ROOT",
-        "configured auditLogPath does not match the expected mcp-winfs audit log shape",
+        "configured auditLogPath does not end in .jsonl",
         {
           details: { configured: configuredPath },
-          hint: "Audit log path must end with .jsonl and live in a folder named 'mcp-winfs'.",
+          hint: "Audit log path must end in .jsonl.",
         },
       ),
     };
   }
-  let real: string;
+  let resolved: string;
   try {
-    real = await fs.realpath(configuredPath);
+    resolved = await abortable(fs.realpath(configuredPath), signal);
   } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e?.code === "ENOENT") {
-      // File not present yet — tail will return [] downstream. There is no
-      // symlink to follow so the lexical check is sufficient here.
-      return { realPath: configuredPath };
+    if (isAbortError(err)) {
+      return {
+        kind: "error",
+        error: buildError("ETIMEDOUT", "audit log realpath aborted", {
+          details: { configured: configuredPath },
+        }),
+      };
     }
+    const e = err as NodeJS.ErrnoException;
+    if (e?.code === "ENOENT") return { kind: "missing" };
     return {
+      kind: "error",
       error: buildError("EIO", `audit log realpath failed: ${e?.message ?? String(err)}`, {
         details: { configured: configuredPath },
       }),
     };
   }
-  if (!isAuditLogPathLegitimate(real)) {
+  if (!isAuditLogPathLegitimate(resolved)) {
     return {
+      kind: "error",
       error: buildError(
         "EPERM_ROOT",
-        "configured auditLogPath resolves (via symlink/junction) to a path that does not match the expected mcp-winfs audit log shape",
+        "configured auditLogPath resolves (via symlink/junction) to a path that does not end in .jsonl",
         {
-          details: { configured: configuredPath, resolved: real },
-          hint: "Audit log path (after realpath) must end with .jsonl and live in a folder named 'mcp-winfs'.",
+          details: { configured: configuredPath, resolved },
         },
       ),
     };
   }
-  return { realPath: real };
+  // P1.2: open the RESOLVED path, not the configured one. fs.open binds the
+  // file descriptor to an inode at this moment; a junction swap of
+  // `configuredPath` after this line is moot because we never traverse it
+  // again.
+  let handle: import("node:fs/promises").FileHandle;
+  try {
+    handle = await abortable(
+      fs.open(resolved, "r"),
+      signal,
+      (h) => h.close().catch(() => {}),
+    );
+  } catch (err) {
+    if (isAbortError(err)) {
+      return {
+        kind: "error",
+        error: buildError("ETIMEDOUT", "audit log open aborted", {
+          details: { configured: configuredPath, resolved },
+        }),
+      };
+    }
+    const e = err as NodeJS.ErrnoException;
+    if (e?.code === "ENOENT") return { kind: "missing" };
+    return {
+      kind: "error",
+      error: buildError("EIO", `audit log open failed: ${e?.message ?? String(err)}`, {
+        details: { configured: configuredPath, resolved },
+      }),
+    };
+  }
+  // fstat the bound handle. Asserts the inode is a regular file (not a
+  // directory, FIFO, device, etc.) before we start reading.
+  let stat: import("node:fs").Stats;
+  try {
+    stat = await abortable(handle.stat(), signal);
+  } catch (err) {
+    await handle.close().catch(() => {});
+    if (isAbortError(err)) {
+      return {
+        kind: "error",
+        error: buildError("ETIMEDOUT", "audit log fstat aborted", {
+          details: { configured: configuredPath, resolved },
+        }),
+      };
+    }
+    return {
+      kind: "error",
+      error: buildError("EIO", `audit log fstat failed: ${(err as Error).message}`, {
+        details: { configured: configuredPath, resolved },
+      }),
+    };
+  }
+  if (!stat.isFile()) {
+    await handle.close().catch(() => {});
+    return {
+      kind: "error",
+      error: buildError("EPERM_ROOT", "audit log path does not resolve to a regular file", {
+        details: { configured: configuredPath, resolved },
+      }),
+    };
+  }
+  return { kind: "open", handle, resolved };
 }
 
 export interface TailLinesOptions {
-  /** Test hook — invoked for each disk read with the byte count. Production
-   *  code passes nothing; the bounded-read invariant test uses it to verify
-   *  the read footprint instead of relying on wall-clock alone. */
+  /** Test hook — invoked for each disk read with the byte count. */
   onRead?: (bytes: number) => void;
+  /** Abort signal forwarded to each fh.read. Aborts surface as AbortError. */
+  signal?: AbortSignal;
+}
+
+function consumeLine(
+  lineBuf: Buffer,
+  collected: z.infer<typeof AuditEntry>[],
+  n: number,
+): boolean {
+  if (lineBuf.length === 0) return true;
+  let line = lineBuf.toString("utf8");
+  // kimi P3 / codex deferred: strip UTF-8 BOM. It only legitimately appears
+  // on the very first line of the file (file byte 0). Cheap unconditional
+  // strip is harmless on every other line — JSON.stringify never emits a
+  // leading ﻿, so the only way an inner line starts with one is if
+  // someone hand-edited the log, in which case the strip is still correct.
+  if (line.charCodeAt(0) === 0xfeff) line = line.slice(1);
+  if (line.length === 0) return true;
+  try {
+    const parsed = JSON.parse(line);
+    const validated = AuditEntry.safeParse(parsed);
+    if (!validated.success) return true;
+    if (validated.data.tool === "audit_tail") return true; // scan-time self-dedup
+    collected.push(validated.data);
+    return collected.length < n;
+  } catch {
+    return true;
+  }
 }
 
 /**
- * Reverse-read the last `n` valid, non-`audit_tail` records from a JSONL
- * file. Bounded: at most `READ_CHUNK_BYTES` per disk read, at most
- * `MAX_TOTAL_READ_BYTES` total. Carries a partial-line buffer between
- * iterations so a JSONL entry split across chunks is reassembled.
- *
- * `audit_tail` records are skipped during the backward scan so the result
- * always contains up to `n` *other* tools' records. This both implements
- * the self-deduplication invariant from spec §4.8 AND defends against the
- * "fill the log with audit_tail calls" attack where post-filtering would
- * yield an empty response (codex review P2 / 'self-dedup drain').
- *
- * Output is oldest-first within the returned slice, matching the v0.3.0
- * contract.
+ * Reverse-read up to n non-audit_tail entries from an open file handle.
+ * The caller is responsible for closing the handle. UTF-8 BOM on the first
+ * line is stripped before JSON.parse.
+ */
+export async function tailLinesFromHandle(
+  handle: import("node:fs/promises").FileHandle,
+  n: number,
+  opts: TailLinesOptions = {},
+): Promise<z.infer<typeof AuditEntry>[]> {
+  if (n === 0) return [];
+  const collected: z.infer<typeof AuditEntry>[] = [];
+  const stat = await handle.stat();
+  let pos = stat.size;
+  let partialEnd: Buffer = Buffer.alloc(0);
+  let totalRead = 0;
+  let keepGoing = true;
+
+  while (keepGoing && pos > 0 && totalRead < MAX_TOTAL_READ_BYTES) {
+    if (opts.signal?.aborted) {
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    }
+    const remaining = MAX_TOTAL_READ_BYTES - totalRead;
+    const readSize = Math.min(READ_CHUNK_BYTES, pos, remaining);
+    pos -= readSize;
+    const buf = Buffer.alloc(readSize);
+    const { bytesRead } = await abortable(
+      handle.read(buf, 0, readSize, pos),
+      opts.signal,
+    );
+    if (bytesRead === 0) break;
+    totalRead += bytesRead;
+    opts.onRead?.(bytesRead);
+
+    const combined =
+      bytesRead === readSize
+        ? Buffer.concat([buf, partialEnd])
+        : Buffer.concat([buf.subarray(0, bytesRead), partialEnd]);
+
+    const lfIndices: number[] = [];
+    for (let i = 0; i < combined.length; i++) {
+      if (combined[i] === 0x0a) lfIndices.push(i);
+    }
+    if (lfIndices.length === 0) {
+      partialEnd = combined;
+      continue;
+    }
+    const firstLF = lfIndices[0]!;
+    partialEnd = combined.subarray(0, firstLF);
+
+    const trailing = combined.subarray(lfIndices[lfIndices.length - 1]! + 1);
+    if (!consumeLine(trailing, collected, n)) {
+      keepGoing = false;
+      break;
+    }
+    for (let i = lfIndices.length - 1; i >= 1; i--) {
+      const start = lfIndices[i - 1]! + 1;
+      const end = lfIndices[i]!;
+      if (!consumeLine(combined.subarray(start, end), collected, n)) {
+        keepGoing = false;
+        break;
+      }
+    }
+  }
+
+  if (keepGoing && pos === 0 && partialEnd.length > 0) {
+    consumeLine(partialEnd, collected, n);
+  }
+  collected.reverse(); // oldest-first
+  return collected;
+}
+
+/**
+ * Path-based convenience wrapper. Opens the file directly and delegates to
+ * tailLinesFromHandle. Used by tests; production callers go through
+ * `auditTailImpl` which uses `openAuditLog` for the full P1.2 + P1.3
+ * defense (TOCTOU-safe open, fstat sanity).
  */
 export async function tailLines(
   filePath: string,
@@ -143,122 +361,50 @@ export async function tailLines(
   opts: TailLinesOptions = {},
 ): Promise<z.infer<typeof AuditEntry>[]> {
   if (n === 0) return [];
-
-  let fh: import("node:fs/promises").FileHandle;
+  let handle: import("node:fs/promises").FileHandle;
   try {
-    fh = await fs.open(filePath, "r");
+    handle = await abortable(
+      fs.open(filePath, "r"),
+      opts.signal,
+      (h) => h.close().catch(() => {}),
+    );
   } catch (err) {
+    if (isAbortError(err)) throw err;
     const e = err as NodeJS.ErrnoException;
     if (e?.code === "ENOENT") return [];
     throw err;
   }
-
-  // collected stores entries newest-first as we scan backward. Reversed at end.
-  const collected: z.infer<typeof AuditEntry>[] = [];
-
-  const consume = (lineBuf: Buffer): boolean => {
-    if (lineBuf.length === 0) return true;
-    const line = lineBuf.toString("utf8");
-    try {
-      const parsed = JSON.parse(line);
-      const validated = AuditEntry.safeParse(parsed);
-      if (!validated.success) return true;
-      if (validated.data.tool === "audit_tail") return true; // scan-time self-dedup
-      collected.push(validated.data);
-      return collected.length < n;
-    } catch {
-      return true; // skip malformed
-    }
-  };
-
   try {
-    const stat = await fh.stat();
-    let pos = stat.size;
-    // Bytes from the current iteration that fall BEFORE the first `\n` we
-    // saw — they belong to a line that continues into an earlier (not-yet-
-    // read) chunk. Stored as raw bytes to keep multi-byte UTF-8 sequences
-    // intact across the chunk boundary.
-    let partialEnd: Buffer = Buffer.alloc(0);
-    let totalRead = 0;
-    let keepGoing = true;
-
-    while (keepGoing && pos > 0 && totalRead < MAX_TOTAL_READ_BYTES) {
-      const remaining = MAX_TOTAL_READ_BYTES - totalRead;
-      const readSize = Math.min(READ_CHUNK_BYTES, pos, remaining);
-      pos -= readSize;
-      const buf = Buffer.alloc(readSize);
-      const { bytesRead } = await fh.read(buf, 0, readSize, pos);
-      if (bytesRead === 0) break;
-      totalRead += bytesRead;
-      opts.onRead?.(bytesRead);
-
-      // File-order: newBytes (earlier) | partialEnd (later, awaiting start).
-      const combined =
-        bytesRead === readSize
-          ? Buffer.concat([buf, partialEnd])
-          : Buffer.concat([buf.subarray(0, bytesRead), partialEnd]);
-
-      // Locate every \n.
-      const lfIndices: number[] = [];
-      for (let i = 0; i < combined.length; i++) {
-        if (combined[i] === 0x0a) lfIndices.push(i);
-      }
-
-      if (lfIndices.length === 0) {
-        // No newline in this combined chunk. The whole thing is a continuation
-        // of the line we're trying to demarcate; keep it for the next iteration.
-        partialEnd = combined;
-        continue;
-      }
-
-      // Bytes BEFORE the first \n need an earlier chunk to confirm their start.
-      const firstLF = lfIndices[0]!;
-      partialEnd = combined.subarray(0, firstLF);
-
-      // Bytes between consecutive \n's plus the trailing segment after the
-      // last \n are all complete lines. Process newest-first (rightmost first).
-      const trailing = combined.subarray(lfIndices[lfIndices.length - 1]! + 1);
-      if (!consume(trailing)) {
-        keepGoing = false;
-        break;
-      }
-      for (let i = lfIndices.length - 1; i >= 1; i--) {
-        const start = lfIndices[i - 1]! + 1;
-        const end = lfIndices[i]!;
-        if (!consume(combined.subarray(start, end))) {
-          keepGoing = false;
-          break;
-        }
-      }
-    }
-
-    // If we reached the start of the file, partialEnd holds the file's very
-    // first line. It IS a complete line (delimited by file-start on the left,
-    // by the first \n on the right which we already processed earlier).
-    if (keepGoing && pos === 0 && partialEnd.length > 0) {
-      consume(partialEnd);
-    }
+    return await tailLinesFromHandle(handle, n, opts);
   } finally {
-    await fh.close();
+    await handle.close().catch(() => {});
   }
-
-  collected.reverse(); // oldest-first
-  return collected;
 }
 
 export async function auditTailImpl(
   args: Input,
   config: ResolvedConfig,
+  signal?: AbortSignal,
 ): Promise<Result<AuditTailResult>> {
-  const resolved = await resolveAuditLogPath(config.resolvedAuditLogPath);
-  if ("error" in resolved) return resolved.error;
+  const opened = await openAuditLog(config.resolvedAuditLogPath, signal);
+  if (opened.kind === "error") return opened.error;
+  if (opened.kind === "missing") return ok({ entries: [], total: 0 });
 
   const n = args.n ?? DEFAULT_N;
   let entries: z.infer<typeof AuditEntry>[];
   try {
-    entries = await tailLines(resolved.realPath, n);
+    entries = await tailLinesFromHandle(opened.handle, n, { signal });
   } catch (err) {
-    return buildError("EIO", `failed to read audit log: ${(err as Error).message}`);
+    if (isAbortError(err)) {
+      return buildError("ETIMEDOUT", "audit log tail aborted", {
+        details: { resolved: opened.resolved },
+      });
+    }
+    return buildError("EIO", `failed to read audit log: ${(err as Error).message}`, {
+      details: { resolved: opened.resolved },
+    });
+  } finally {
+    await opened.handle.close().catch(() => {});
   }
   return ok({ entries, total: entries.length });
 }
@@ -272,21 +418,24 @@ export function registerAuditTailTool(server: McpServer, config: ResolvedConfig)
 Use this to recover from chat context loss: the log records tool name, sanitized args,
 status, error code (if any) and duration.
 
-This tool reads from \`config.resolvedAuditLogPath\` which is OUTSIDE allowedRoots by design
-(\`%LOCALAPPDATA%\\mcp-winfs\\audit.jsonl\` on Windows). The configured path is checked both
-lexically (must end with \`.jsonl\` and live in a folder named \`mcp-winfs\`) AND after
-\`fs.realpath\` — a symlink/junction at a legit-shape path pointing elsewhere returns
-EPERM_ROOT with both the configured and resolved paths in details.
+The audit log lives OUTSIDE allowedRoots by design (\`%LOCALAPPDATA%\\mcp-winfs\\audit.jsonl\`
+on Windows). The configured path is checked lexically (must end in \`.jsonl\`), then
+\`fs.realpath\` resolves any symlinks/junctions, the resolved path is re-validated, and
+\`fs.open\` is invoked on the RESOLVED path so the file descriptor is bound to an inode at
+open time — subsequent junction swaps of the configured path cannot redirect reads.
+\`fileHandle.stat\` confirms the inode is a regular file.
 
-Reads are bounded: 256 KB chunks scanned backward from EOF, 64 MB total ceiling. Trailing
-\`audit_tail\` records are filtered out during the scan (not post-drained) so a flood of
-self-calls cannot wash legitimate entries out of the response.
+Reads are bounded: 256 KB chunks scanned backward from EOF, 64 MB total ceiling. UTF-8 BOM
+on the first line is stripped before JSON.parse. Trailing \`audit_tail\` records are
+filtered during the scan (not post-drained) so a flood of self-calls cannot wash legitimate
+entries out of the response. All I/O honors the wrapper AbortSignal so a slow disk
+(roaming %LOCALAPPDATA% via OneDrive sync) surfaces as ETIMEDOUT, not a hang.
 
 Args:
   - n (number, optional): entries to return. Default ${DEFAULT_N}, hard cap ${HARD_CAP}.
 
 Returns: { entries: Array<{ts, tool, args_summary, result_status, error_code?, duration_ms}>, total }
-Errors: EPERM_ROOT (auditLogPath not recognised as mcp-winfs log, lexically or after realpath), EIO.`,
+Errors: EPERM_ROOT (path fails .jsonl check before or after realpath, or resolves to a non-file), ETIMEDOUT (I/O aborted by wrapper), EIO.`,
       inputSchema: InputShape,
       outputSchema: OutputShape,
       annotations: {
@@ -297,8 +446,8 @@ Errors: EPERM_ROOT (auditLogPath not recognised as mcp-winfs log, lexically or a
       },
     },
     async (args) =>
-      runTool({ tool: "audit_tail", config }, args, (a) =>
-        auditTailImpl(a as Input, config),
+      runTool({ tool: "audit_tail", config }, args, (a, signal) =>
+        auditTailImpl(a as Input, config, signal),
       ),
   );
 }

@@ -86,7 +86,7 @@ describe("tools/system/audit_tail", () => {
     expect(res.value.total).toBe(3);
   });
 
-  it("EPERM_ROOT when configured auditLogPath does not match mcp-winfs convention", async () => {
+  it("EPERM_ROOT when configured auditLogPath does not end in .jsonl", async () => {
     const badConfig: ResolvedConfig = {
       ...config,
       resolvedAuditLogPath: path.join(root, "definitely-not-audit.txt"),
@@ -97,7 +97,10 @@ describe("tools/system/audit_tail", () => {
     expect(res.error.code).toBe("EPERM_ROOT");
   });
 
-  it("isAuditLogPathLegitimate enforces both shape and name conventions", () => {
+  it("isAuditLogPathLegitimate enforces .jsonl extension only (kimi P1.3)", () => {
+    // v0.3.0/v0.3.1 also required parent-dir === "mcp-winfs" — removed in
+    // v0.3.2 per kimi P1.3 (parent layer was defense-in-depth and brittle
+    // to future repo renames). Only the extension gates acceptance now.
     expect(
       isAuditLogPathLegitimate(
         process.platform === "win32"
@@ -105,18 +108,27 @@ describe("tools/system/audit_tail", () => {
           : "/home/x/.local/share/mcp-winfs/audit.jsonl",
       ),
     ).toBe(true);
+    // Any folder is accepted now, as long as the file ends in .jsonl.
     expect(
       isAuditLogPathLegitimate(
         process.platform === "win32"
           ? "C:\\Users\\x\\AppData\\Local\\some-other\\audit.jsonl"
           : "/home/x/some-other/audit.jsonl",
       ),
-    ).toBe(false);
+    ).toBe(true);
+    // Non-.jsonl extensions are rejected.
     expect(
       isAuditLogPathLegitimate(
         process.platform === "win32"
           ? "C:\\Users\\x\\mcp-winfs\\notes.txt"
           : "/home/x/mcp-winfs/notes.txt",
+      ),
+    ).toBe(false);
+    expect(
+      isAuditLogPathLegitimate(
+        process.platform === "win32"
+          ? "C:\\Users\\x\\mcp-winfs\\audit.log"
+          : "/home/x/mcp-winfs/audit.log",
       ),
     ).toBe(false);
   });
