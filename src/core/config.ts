@@ -35,7 +35,7 @@ export interface ResolvedConfig extends RawConfig {
   version: string;
 }
 
-const VERSION = "0.3.3";
+const VERSION = "0.4.0";
 
 /**
  * Expand %ENVVAR% sequences (Windows-style) in a path string.
