@@ -811,3 +811,51 @@ const server = new Server(
 **F. Migration trigger.** При появлении на npm `@modelcontextprotocol/server` со стабильным `latest` тегом на 2.x.x — отдельный migration sprint (отслеживается в `MIGRATION.md` репо). Не блокирует v0.1.
 
 **G. Appendix A статус.** Описывает целевой V2 API. Используется как reference для будущей миграции, не как ground truth для v0.1. Quick reference для v0.1 — секция C выше этого amendment'а.
+
+### 2026-05-16 — v0.2 open-question decisions (mutations + batch read)
+
+**Motivation.** §4.2 (move/copy/mkdir), §4.3 (read_multiple_files) и §4.9 (list_allowed_directories) оставляют четыре поведенческих развилки, которые имплементация v0.2 должна решить детерминистически. Фиксируем без переписывания первоначальных §§ — все четыре правила добавляются как уточнения.
+
+**A. Cross-volume move — fail-fast EXDEV (v0.2).**
+
+`move` использует только `fs.rename`. На NTFS rename atomарен **внутри одного тома**; cross-volume вызов вернёт `EXDEV` (Node-level errno). v0.2 пробрасывает это как структурированную ошибку:
+
+```ts
+buildError("EIO", "cross-volume move is not supported in v0.2", {
+  hint: "Source and destination must be on the same drive. v0.3 will add an opt-in copy+delete fallback.",
+  details: { src, dst, errno: "EXDEV" }
+})
+```
+
+Не реализуем silent copy+delete fallback в v0.2 — он скрывает non-atomicity и ломает contract "move = атомарный". В v0.3 добавим явный flag `allow_cross_volume: boolean`.
+
+**B. Copy + dangling/escape symlinks — skip + counter.**
+
+В рамках recursive copy:
+- Каждый entry внутри source tree проходит через `fs.realpath`. Если realpath возвращает path **вне** allowedRoots, entry **скипается**.
+- Dangling symlink (realpath → ENOENT) тоже скипается.
+- Результат включает `files_skipped: number` и (опционально, до 10) `skipped_paths: string[]` для трассируемости.
+
+Это безопасное поведение по умолчанию. Альтернативу "follow symlinks even outside allowedRoots" не реализуем — она ломает spec §2.2. Альтернативу "fail на первом skip" — не реализуем, потому что recursive copy на большой директории не должен валиться из-за одного линка.
+
+**C. `read_multiple_files` — Promise.all с per-file timeout.**
+
+- `paths` обрабатываются параллельно через `Promise.all`.
+- Каждый file inherits `config.defaultTimeoutMs` (clamped by `config.maxTimeoutMs`) индивидуально через тот же `withTimeout` wrapper, который используют одноэлементные tools.
+- Per-file ошибка → `{path, error: {code, message}}`, успех → `{path, content, lines_returned, bytes_returned, truncated}`.
+- Top-level вызов **никогда** не isError — даже если все файлы упали, response shape единообразен.
+
+Sequential альтернатива отвергнута: при 10 файлах × 10 с timeout мы получим худший случай 100 с, что превышает спецификационные default timeouts.
+
+**D. `list_allowed_directories` — минимальная surface.**
+
+Output: ровно `{allowed_roots: string[], allowed_url_hosts: string[]}`. **Не** возвращаем:
+- `auditLogPath` — leaks внутреннее устройство.
+- `blocklist`, `denied_url_patterns` — даёт атакующему карту того, что фильтруется.
+- `timeouts`, `max_bytes` — нерелевантно для self-orientation.
+
+Если будущему tool понадобится экспонировать конфиг шире (например, для `health` или `selftest`), создаём отдельный tool с явной целью, чтобы surface был осознанным.
+
+**E. Existing-target idempotence для mkdir.**
+
+`mkdir(path, {recursive: true})` на существующей директории возвращает `{created: false, path}` без ошибки. Это согласуется с POSIX-семантикой `mkdir -p`. Только `recursive: false` + path существует → `EEXIST`.

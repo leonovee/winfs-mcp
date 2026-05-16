@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { ResolvedConfig } from "../src/core/config.js";
+import { flushAudit } from "../src/core/audit.js";
 
 /**
  * Create a temp directory and return it as a single-root canonical config.
@@ -36,5 +37,9 @@ export async function makeTempConfig(): Promise<{ config: ResolvedConfig; root: 
 }
 
 export async function cleanupTempConfig(root: string): Promise<void> {
+  // The audit module serializes writes through a module-level queue. If a
+  // test leaves writes in flight, they may try to create files inside `root`
+  // after rm starts — Windows then returns ENOTEMPTY. Flush before delete.
+  await flushAudit();
   await fs.rm(root, { recursive: true, force: true });
 }

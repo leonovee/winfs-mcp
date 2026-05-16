@@ -13,6 +13,7 @@ configs/local.json
 
 # Smoke test artifacts
 test-cyrillic.txt
+desktop-test.txt
 
 # OS / editor
 Thumbs.db
