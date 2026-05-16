@@ -3,6 +3,104 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.0] — 2026-05-16
+
+Search + self-recovery surface. Closes spec §7 v0.3 milestone: "Claude can
+explore the codebase without dropping to a shell, and can recover from a
+context loss by tailing the audit log."
+
+### Added — new tools (4)
+
+- **`glob`** — Find files matching an absolute glob pattern. Supports `*`,
+  `?`, `**` (zero-or-more path segments) and `[...]` character classes.
+  Brace expansion is intentionally not supported (issue two calls instead).
+  The pattern's literal prefix must lie inside `allowedRoots`; every
+  candidate file is realpath-checked so symlink-escape entries never appear
+  in results. Default cap 200, hard cap 2000; oversize → `truncated: true`.
+- **`read_json`** — Convenience wrapper that reads a file via the v0.1
+  `read` tool and `JSON.parse`s the content in one call. Parse failures
+  return the distinct `EBADJSON` code with best-effort line / column /
+  snippet in `details` so the caller can fix the file without a separate
+  read-and-inspect round trip. Inherits `read`'s `EPERM_ROOT`, `ENOENT`,
+  `EISDIR`, `ETOOLARGE`, `EENCODING` semantics unchanged.
+- **`grep`** — Regex search across files matching a glob, with optional
+  context lines and `max_matches` cap. The user pattern is compiled with
+  `new RegExp(...)` only — no `eval`, no `Function`. Bad regex → `EINVAL`
+  with the parser message. `grep` owns its own deadline: on expiry it
+  returns the partial match set with `{truncated: true, reason: "timeout"}`
+  instead of synthesising an error (see spec amendment §F).
+- **`audit_tail`** — Read the last N entries of the structured audit log
+  written by every tool call. Used for self-recovery after a chat
+  context loss. The audit log lives OUTSIDE `allowedRoots` by design
+  (`%LOCALAPPDATA%\mcp-winfs\audit.jsonl`); this tool is the only
+  legitimate exception, gated by a shape check on the configured path
+  (parent dir == `mcp-winfs`, filename ends with `.jsonl`). Any other
+  shape → `EPERM_ROOT`. Self-deduplicates: trailing `audit_tail` entries
+  are dropped from the response.
+
+### Changed — carryover items from v0.2
+
+- **`move`** gained `allow_cross_volume: boolean` (default `false`).
+  Default behaviour unchanged: cross-volume rename returns `EIO` with
+  `errno: EXDEV`. With the flag set, falls back to a non-atomic
+  `copy + delete`. The response envelope now includes `atomic: boolean`
+  so callers can audit which moves were race-free (see spec amendment §G).
+- **`copy`** writes the full `files_skipped_total` to the audit log even
+  when the user-visible `skipped_paths` array is capped at 10. Achieved
+  via a new `ToolContext.auditExtras` hook in `tool_wrapper.ts` —
+  side-channel metadata that lives in the audit record without leaking
+  into the response payload (see spec amendment §H).
+- Spec amendment `2026-05-16 — v0.3 envelopes + move cross-volume opt-in
+  + copy audit telemetry` (§F/§G/§H): formalises the envelope pattern for
+  every array-output tool (`read_multiple_files` was de-facto already
+  shipping one; now also `glob`, `grep`, `audit_tail`), records the
+  opt-in cross-volume semantics, and documents the audit telemetry hook.
+
+### Added — infrastructure
+
+- `src/core/glob.ts` — minimal path-glob compiler shared by `glob` and
+  `grep`. Pure regex, no shell-out, no third-party dependency.
+- `src/core/walk.ts` — realpath-aware recursive file walker. Each entry
+  is realpath-checked so symlink-escape skips happen at walk time (same
+  guard as `copy`'s recursive walker, now extracted).
+- `ToolContext.auditExtras` callback on `runTool` — lets a tool inject
+  extra fields into `args_summary` on the audit record without changing
+  its user-facing schema.
+
+### Added — tests (+36 net new, 120 total)
+
+- `tests/unit/search/glob.test.ts` — 5 tests (happy match, no-match,
+  `max_results` cap, `EPERM_ROOT` outside-sandbox, `EINVAL` on relative
+  pattern).
+- `tests/unit/search/grep.test.ts` — 7 tests (matches, no-match,
+  `EINVAL` on bad regex, `max_matches` cap with `reason: "max_matches"`,
+  `context_before`/`context_after`, `EPERM_ROOT`, deadline → partial
+  result with `reason: "timeout"`).
+- `tests/unit/search/read_json.test.ts` — 5 tests (parse, `EBADJSON` +
+  snippet, `ETOOLARGE`, `EPERM_ROOT`, `ENOENT`).
+- `tests/unit/system/audit_tail.test.ts` — 7 tests (last N, n > total,
+  n = 0, empty file, self-deduplication, `EPERM_ROOT` on non-conforming
+  audit path, `isAuditLogPathLegitimate` truth table).
+- `tests/unit/fs/move.test.ts` — added `allow_cross_volume:false` EXDEV
+  test (mocks `fs.rename`), and `allow_cross_volume:true` fallback test
+  asserting `atomic:false` + delete-of-source.
+- `tests/unit/fs/copy.test.ts` — added carryover #2 test: 15 escaping
+  symlinks → response `skipped_paths.length === 10` but
+  `files_skipped === 15` and `getFullSkipCountForAudit()` returns 15
+  (audit-only telemetry).
+- `tests/invariants/audit_tail_privileged.test.ts` — 4 tests pinning the
+  privileged-read boundary (parent-dir name, `.jsonl` suffix, plausible
+  Win-sensitive paths, plus a legit positive case).
+- `tests/invariants/structured_content.test.ts` extended (+4 new tools
+  + `move` envelope updated for `atomic`).
+- `tests/invariants/timeouts.test.ts` extended with `grep` partial-result
+  case.
+
+### Tests
+
+- 120 passing total (was 84 in v0.2). +36 net new across 5 new unit files
+  + 1 new invariant file + extensions.
+
 ## [0.2.0] — 2026-05-16
 
 Mutations + batch read + introspection. Closes spec §7 v0.2 milestone:

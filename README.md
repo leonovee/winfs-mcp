@@ -5,9 +5,10 @@ Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
 UTF-8-no-BOM invariant.
 
-**Status:** v0.2 — 10 tools (5 core from v0.1 + 5 mutations / batch /
-introspection) and the full core/ invariant layer. v0.3+ adds the
-remaining 19 tools per `docs/design/mcp-winfs-spec.md` §7.
+**Status:** v0.3 — 14 tools (5 core from v0.1 + 5 mutations / batch /
+introspection from v0.2 + 4 search / self-recovery from v0.3) and the
+full core/ invariant layer. v0.4+ adds the remaining 15 tools per
+`docs/design/mcp-winfs-spec.md` §7.
 
 ## Install
 
@@ -73,7 +74,7 @@ Use absolute paths for both `dist/index.js` and the config. **Do not use
 Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 `list`, `stat`) should appear in the tools list.
 
-## Tools (v0.2)
+## Tools (v0.3)
 
 ### Core FS (v0.1)
 
@@ -90,14 +91,25 @@ Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 | Tool                       | Read-only | What it does                                                                |
 |----------------------------|-----------|-----------------------------------------------------------------------------|
 | `mkdir`                    | no        | Create a directory. `recursive:true` (default) → `mkdir -p` semantics: idempotent on existing dir. |
-| `move`                     | no        | Rename / move within allowedRoots. Same-volume only — cross-volume fails fast with `EIO + errno:EXDEV` (see spec amendment §A). Both `src` and `dst` must be inside allowedRoots. |
-| `copy`                     | no        | Recursive copy. Each entry realpath-checked; junction/symlink escape or dangling links are skipped and reported in `files_skipped + skipped_paths` (cap 10). |
+| `move`                     | no        | Rename / move within allowedRoots. Atomic `fs.rename` by default; opt in to a non-atomic copy+delete fallback for cross-volume moves with `allow_cross_volume:true` (response `atomic` flag tells you which path ran). |
+| `copy`                     | no        | Recursive copy. Each entry realpath-checked; junction/symlink escape or dangling links are skipped and reported in `files_skipped + skipped_paths` (cap 10). Full skip count goes to the audit log even when the user-visible array is capped. |
 | `read_multiple_files`      | yes       | Batch read 1..50 paths in parallel with per-file timeout. Per-file errors propagate inside `files[]`; top-level call never `isError`. |
 | `list_allowed_directories` | yes       | Self-orientation. Returns `{allowed_roots, allowed_url_hosts}` only — never leaks blocklists, timeouts, or audit path. |
+
+### Search + self-recovery (v0.3)
+
+| Tool          | Read-only | What it does                                                                |
+|---------------|-----------|-----------------------------------------------------------------------------|
+| `glob`        | yes       | Find files matching an absolute glob (`*`, `?`, `**`, `[...]`; no brace expansion). Pattern's literal prefix must be inside allowedRoots. Default cap 200, hard cap 2000 → `truncated:true`. |
+| `grep`        | yes       | Regex search across files matching a glob, with `case_sensitive` flag, `context_lines` (0..10) and `max_matches`. Pattern compiled with `new RegExp` — no `eval`. Deadline returns partial results with `{truncated:true, reason:"timeout"}` instead of erroring. |
+| `read_json`   | yes       | Read + `JSON.parse` in one call. Distinct `EBADJSON` code for parse failures (with line / column / snippet). Inherits `read`'s allowedRoots, BOM and `ETOOLARGE` semantics. |
+| `audit_tail`  | yes       | Tail the structured audit log for self-recovery after context loss. Reads from `%LOCALAPPDATA%\mcp-winfs\audit.jsonl` (the only legitimate exception to allowedRoots — gated by a shape check on parent dir + `.jsonl` suffix). Default 50, hard cap 500. |
 
 Every tool returns pure-payload `structuredContent` that matches its
 declared `outputSchema` 1:1 (no `ok` / `tool` envelope — see [v0.1.1
 hotfix](docs/v0.2-backlog.md#1--structuredcontent-validation-mismatch-on-every-tool-response--resolved-in-v011)).
+Array-output tools (`glob`, `grep`, `audit_tail`, `read_multiple_files`)
+use a `{<plural>, total, ...flags}` envelope — see spec amendment §F.
 
 ## Hard invariants (always on)
 
@@ -148,15 +160,17 @@ npm test          # vitest run
 npm run test:watch
 ```
 
-v0.2 ships 84 tests: 53 unit (per-tool happy path + every error code
-across 10 tools) and 31 invariant (UTF-8 roundtrip, junction/`..` escape,
-timeout abort, atomic-write integrity, audit redaction, both-roots check
-for mutations, structuredContent shape across all 10 tools).
+v0.3 ships 120 tests: 77 unit (per-tool happy path + every error code
+across 14 tools) and 43 invariant (UTF-8 roundtrip, junction/`..` escape,
+timeout abort + grep partial-result, atomic-write integrity, audit
+redaction, both-roots check for mutations, structuredContent shape
+across all 14 tools, audit_tail privileged-read boundary).
 
 ## Acceptance reports
 
 - v0.1: [`docs/v0.1-acceptance.md`](docs/v0.1-acceptance.md)
 - v0.2: [`docs/v0.2-acceptance.md`](docs/v0.2-acceptance.md)
+- v0.3: [`docs/v0.3-acceptance.md`](docs/v0.3-acceptance.md)
 
 ## Roadmap
 
@@ -164,7 +178,7 @@ for mutations, structuredContent shape across all 10 tools).
 
 - ✅ **v0.1** — `read`, `write`, `append`, `list`, `stat`
 - ✅ **v0.2** — `mkdir`, `move`, `copy`, `read_multiple_files`, `list_allowed_directories`
-- **v0.3** — `grep`, `glob`, `read_json`, `audit_tail`
+- ✅ **v0.3** — `grep`, `glob`, `read_json`, `audit_tail`
 - **v0.4** — `edit_file` (with `dry_run`), `read_section`, `read_since`, `diff_files`
 - **v0.5** — git read-only (`log`, `status`, `diff`, `show`, `blame`)
 - **v0.6** — `execute_command`, `run_python`, `run_pytest`
