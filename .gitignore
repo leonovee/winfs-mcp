@@ -11,9 +11,12 @@ coverage/
 # Local working config with real paths (not the template)
 configs/local.json
 
-# Smoke test artifacts
+# Smoke test artifacts (Inspector probes — recreatable, harmless if absent)
 test-cyrillic.txt
 desktop-test.txt
+test-inspector/
+archived.txt
+archived.backup.txt
 
 # OS / editor
 Thumbs.db
