@@ -233,7 +233,7 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
     expect(Object.keys(sc).sort()).toEqual(["matches", "total", "truncated"]);
   });
 
-  it("audit_tail: pure payload {entries, total}", async () => {
+  it("audit_tail: pure payload {entries, total, entries_seen_total}", async () => {
     const { auditTailImpl } = await import("../../src/tools/system/audit_tail.js");
     const res = await runTool(
       { tool: "audit_tail", config },
@@ -242,7 +242,7 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
     );
     expect(res.isError).toBeUndefined();
     const sc = res.structuredContent as Record<string, unknown>;
-    expect(Object.keys(sc).sort()).toEqual(["entries", "total"]);
+    expect(Object.keys(sc).sort()).toEqual(["entries", "entries_seen_total", "total"]);
   });
 
   it("read_multiple_files: pure payload {files, total, ok_count, error_count}", async () => {

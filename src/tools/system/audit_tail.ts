@@ -36,11 +36,13 @@ const AuditEntry = z.object({
 const OutputShape = {
   entries: z.array(AuditEntry),
   total: z.number().int().nonnegative(),
+  entries_seen_total: z.number().int().nonnegative(),
 } as const;
 
 interface AuditTailResult extends Record<string, unknown> {
   entries: z.infer<typeof AuditEntry>[];
   total: number;
+  entries_seen_total: number;
 }
 
 /**
@@ -283,10 +285,15 @@ export interface TailLinesOptions {
   signal?: AbortSignal;
 }
 
+interface ScanCounters {
+  seen: number;
+}
+
 function consumeLine(
   lineBuf: Buffer,
   collected: z.infer<typeof AuditEntry>[],
   n: number,
+  counters: ScanCounters,
 ): boolean {
   if (lineBuf.length === 0) return true;
   let line = lineBuf.toString("utf8");
@@ -301,6 +308,10 @@ function consumeLine(
     const parsed = JSON.parse(line);
     const validated = AuditEntry.safeParse(parsed);
     if (!validated.success) return true;
+    // §M: any structurally-valid AuditEntry counts toward entries_seen_total,
+    // even if scan-time self-dedup or n-cap filters it out of the response.
+    // This is the diagnostic the field exists for.
+    counters.seen++;
     if (validated.data.tool === "audit_tail") return true; // scan-time self-dedup
     collected.push(validated.data);
     return collected.length < n;
@@ -309,18 +320,32 @@ function consumeLine(
   }
 }
 
+export interface TailLinesResult {
+  entries: z.infer<typeof AuditEntry>[];
+  /** §M: count of structurally-valid AuditEntry records walked during the
+   *  backward scan. Includes the records that were filtered by self-dedup or
+   *  passed over after the n cap was hit mid-chunk. Diagnostic only — does
+   *  not reflect total file contents past the read ceiling / n cap. */
+  scanned: number;
+}
+
 /**
  * Reverse-read up to n non-audit_tail entries from an open file handle.
  * The caller is responsible for closing the handle. UTF-8 BOM on the first
  * line is stripped before JSON.parse.
+ *
+ * Returns both the entries (oldest-first within the returned slice) and a
+ * `scanned` count of every structurally-valid AuditEntry observed during
+ * the backward scan — see TailLinesResult / spec §M.
  */
 export async function tailLinesFromHandle(
   handle: import("node:fs/promises").FileHandle,
   n: number,
   opts: TailLinesOptions = {},
-): Promise<z.infer<typeof AuditEntry>[]> {
-  if (n === 0) return [];
+): Promise<TailLinesResult> {
+  if (n === 0) return { entries: [], scanned: 0 };
   const collected: z.infer<typeof AuditEntry>[] = [];
+  const counters: ScanCounters = { seen: 0 };
   const stat = await handle.stat();
   let pos = stat.size;
   let partialEnd: Buffer = Buffer.alloc(0);
@@ -360,14 +385,14 @@ export async function tailLinesFromHandle(
     partialEnd = combined.subarray(0, firstLF);
 
     const trailing = combined.subarray(lfIndices[lfIndices.length - 1]! + 1);
-    if (!consumeLine(trailing, collected, n)) {
+    if (!consumeLine(trailing, collected, n, counters)) {
       keepGoing = false;
       break;
     }
     for (let i = lfIndices.length - 1; i >= 1; i--) {
       const start = lfIndices[i - 1]! + 1;
       const end = lfIndices[i]!;
-      if (!consumeLine(combined.subarray(start, end), collected, n)) {
+      if (!consumeLine(combined.subarray(start, end), collected, n, counters)) {
         keepGoing = false;
         break;
       }
@@ -375,10 +400,10 @@ export async function tailLinesFromHandle(
   }
 
   if (keepGoing && pos === 0 && partialEnd.length > 0) {
-    consumeLine(partialEnd, collected, n);
+    consumeLine(partialEnd, collected, n, counters);
   }
   collected.reverse(); // oldest-first
-  return collected;
+  return { entries: collected, scanned: counters.seen };
 }
 
 /**
@@ -386,6 +411,10 @@ export async function tailLinesFromHandle(
  * tailLinesFromHandle. Used by tests; production callers go through
  * `auditTailImpl` which uses `openAuditLog` for the full P1.2 + P1.3
  * defense (TOCTOU-safe open, fstat sanity).
+ *
+ * Returns only the entries array for back-compat with existing tests; the
+ * `scanned` count is reachable via `tailLinesFromHandle` directly when
+ * needed (production path uses it for `entries_seen_total`).
  */
 export async function tailLines(
   filePath: string,
@@ -407,7 +436,8 @@ export async function tailLines(
     throw err;
   }
   try {
-    return await tailLinesFromHandle(handle, n, opts);
+    const { entries } = await tailLinesFromHandle(handle, n, opts);
+    return entries;
   } finally {
     await handle.close().catch(() => {});
   }
@@ -420,12 +450,13 @@ export async function auditTailImpl(
 ): Promise<Result<AuditTailResult>> {
   const opened = await openAuditLog(config.resolvedAuditLogPath, signal);
   if (opened.kind === "error") return opened.error;
-  if (opened.kind === "missing") return ok({ entries: [], total: 0 });
+  if (opened.kind === "missing") return ok({ entries: [], total: 0, entries_seen_total: 0 });
 
   const n = args.n ?? DEFAULT_N;
   let entries: z.infer<typeof AuditEntry>[];
+  let scanned: number;
   try {
-    entries = await tailLinesFromHandle(opened.handle, n, { signal });
+    ({ entries, scanned } = await tailLinesFromHandle(opened.handle, n, { signal }));
   } catch (err) {
     if (isAbortError(err)) {
       return buildError("ETIMEDOUT", "audit log tail aborted", {
@@ -438,7 +469,7 @@ export async function auditTailImpl(
   } finally {
     await opened.handle.close().catch(() => {});
   }
-  return ok({ entries, total: entries.length });
+  return ok({ entries, total: entries.length, entries_seen_total: scanned });
 }
 
 export function registerAuditTailTool(server: McpServer, config: ResolvedConfig): void {
@@ -466,8 +497,12 @@ entries out of the response. All I/O honors the wrapper AbortSignal so a slow di
 Args:
   - n (number, optional): entries to return. Default ${DEFAULT_N}, hard cap ${HARD_CAP}.
 
-Returns: { entries: Array<{ts, tool, args_summary, result_status, error_code?, duration_ms}>, total }
+Returns: { entries: Array<{ts, tool, args_summary, result_status, error_code?, duration_ms}>, total, entries_seen_total }
   - \`total\` is always \`entries.length\` per the envelope convention in spec §F.
+  - \`entries_seen_total\` (spec §M, v0.5) counts every structurally-valid record walked
+    during the backward scan, including those filtered by self-dedup (\`audit_tail\` entries)
+    or skipped after the n-cap was hit mid-chunk. Diagnostic only — when
+    \`entries_seen_total > total\` the gap is filtered \`audit_tail\` records.
 
 Errors: EPERM_ROOT (non-absolute path, missing/wrong extension before or after realpath, non-regular file), ETIMEDOUT (I/O aborted by wrapper), EIO (filesystem failure — raw cause in \`error.details.cause\`).`,
       inputSchema: InputShape,

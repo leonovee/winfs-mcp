@@ -949,3 +949,29 @@ Response для `copy` уже cap'ает `skipped_paths` до 10 entries (per а
 - **`a_label` / `b_label`.** Basename для file inputs, `"<inline>"` для inline. Surfaced в response для audit-trail.
 - **Output envelope.** `{ diff, identical, lines_added, lines_removed, format, a_label, b_label, truncated }`. `truncated: true` если diff превысил `config.maxDiffBytes` (новый knob, default 256 KB).
 - **Errors.** `EPERM_ROOT` (any side), `ENOENT`, `EISDIR` per side, `EINVAL` (mutex), `EENCODING` (binary), `ETOOLARGE` (input > `readMaxBytes`).
+
+### 2026-05-17 — v0.5 carryover: §M `audit_tail.entries_seen_total` diagnostic field
+
+**Motivation.** v0.3.x audit_tail responses surface `total === entries.length` (envelope §F). Kimi + Gemini P3 reviews suggested renaming `total` to `entries_returned` to clarify the post-filter shrinkage when scan-time self-dedup drops `audit_tail` records. The rename was rejected per §F (renaming `total` would break the envelope contract for every plural-tool response). Instead, v0.5 adds a supplementary diagnostic that answers the same question without contract churn.
+
+**M. `audit_tail.entries_seen_total`.**
+
+New field in the `audit_tail` output envelope, alongside `entries` and `total`:
+
+```ts
+{
+  entries: AuditEntry[],          // up to n records, oldest-first
+  total: number,                  // === entries.length (envelope §F invariant)
+  entries_seen_total: number      // §M: scanned during the backward walk
+}
+```
+
+Semantics:
+
+- **What counts.** Every structurally-valid `AuditEntry` line observed during the backward scan, including records dropped by scan-time self-dedup (`tool === "audit_tail"`) and records skipped after the n-cap was hit mid-chunk. Malformed lines (JSON parse failure, missing required field) do **not** count.
+- **What does NOT count.** Records past the read ceiling (`MAX_TOTAL_READ_BYTES = 64 MB`) or before the start of the file. The field is *scan-bounded*, not *file-bounded* — it reflects what this call walked, not what the file contains.
+- **Diagnostic only.** When `entries_seen_total > total`, the gap is filtered `audit_tail` records or post-cap overflow. The caller can use it to detect "the log has more activity than what I got" without having to call with progressively higher `n`.
+- **`{kind: "missing"}` path.** Returns `entries_seen_total: 0` (file does not exist; nothing was walked).
+- **`n: 0` path.** Returns `entries_seen_total: 0` (early-out before any read).
+
+Implementation: `tailLinesFromHandle` now returns `{entries, scanned}` instead of just `entries`; `auditTailImpl` plumbs `scanned` into the output envelope. The path-based `tailLines` wrapper preserves its previous `Promise<AuditEntry[]>` signature for test back-compat.
