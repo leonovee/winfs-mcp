@@ -369,4 +369,42 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
       ["content", "file_rotated", "mtime", "new_offset", "total_bytes", "truncated"].sort(),
     );
   });
+
+  // ── v0.5 new tools ────────────────────────────────────────────────────
+
+  it("check_env: pure payload {present, length, prefix}", async () => {
+    const { checkEnvImpl } = await import("../../src/tools/system/check_env.js");
+    const res = await runTool(
+      { tool: "check_env", config },
+      { name: "PATH" },
+      (a) => checkEnvImpl(a as { name: string }, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["length", "prefix", "present"]);
+  });
+
+  // Note: git / exec / fetch_url envelopes have non-trivial setup requirements
+  // (real repo, subprocess, HTTP server). Their per-tool test files exercise
+  // the impl directly; this invariant suite checks only the envelope shape via
+  // the impl signatures, which is statically guaranteed by Zod outputSchema +
+  // structuredContent contract.
+  // The runtime probes here would duplicate the per-tool suites without
+  // adding contract coverage; the structuredContent invariant is upheld by
+  // the v0.1.1 wrapper for every registered tool. We add a single end-to-end
+  // smoke test (git_status against a tmp non-repo) to confirm the wrapper
+  // surfaces v0.5 tool errors in the expected shape.
+
+  it("git_status error envelope: ENOTREPO surfaces in content[0].text, no structuredContent", async () => {
+    const { gitStatusImpl } = await import("../../src/tools/git/git_status.js");
+    const res = await runTool(
+      { tool: "git_status", config },
+      { repo_path: root },
+      (a) => gitStatusImpl(a as { repo_path: string }, config),
+    );
+    expect(res.isError).toBe(true);
+    expect(res.structuredContent).toBeUndefined();
+    const parsed = JSON.parse(res.content[0]!.text);
+    expect(parsed.code).toBe("ENOTREPO");
+  });
 });

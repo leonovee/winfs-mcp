@@ -11,7 +11,16 @@ export interface AuditRecord {
   duration_ms: number;
 }
 
-const SENSITIVE_ARG_KEYS = new Set(["content", "edits", "a_inline", "b_inline"]);
+const SENSITIVE_ARG_KEYS = new Set([
+  "content",
+  "edits",
+  "a_inline",
+  "b_inline",
+  // v0.5 — exec / network surface
+  "command", // execute_command: raw PowerShell expression (may contain secrets)
+  "script", // run_python: -c script body
+  "url", // fetch_url: query string may carry tokens; tool's auditExtras gives a smarter view
+]);
 
 /**
  * Sanitize an args object for audit logging:

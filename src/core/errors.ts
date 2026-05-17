@@ -15,7 +15,15 @@ export type ErrorCode =
   | "EBUSY"
   | "EBADJSON"
   | "EINVAL"
-  | "EIO";
+  | "EIO"
+  // v0.5 — git / exec / system / network
+  | "ENOTREPO" // git_*: path is not a git repository
+  | "EBLOCKED" // execute_command: pre-spawn blocklist regex hit
+  | "EHOSTNOTALLOWED" // fetch_url: host outside whitelist or resolves to internal IP
+  | "ESIZE" // fetch_url: response body > config cap
+  | "ENOTFOUND" // find_command: command not in PATH
+  | "EPARSE" // run_pytest: output format unrecognized
+  | "EPYTHONNOTFOUND"; // run_python: python binary missing
 
 export interface StructuredError {
   ok: false;

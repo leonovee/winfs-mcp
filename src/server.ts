@@ -18,6 +18,17 @@ import { registerReadSectionTool } from "./tools/slicing/read_section.js";
 import { registerDiffFilesTool } from "./tools/slicing/diff_files.js";
 import { registerReadSinceTool } from "./tools/slicing/read_since.js";
 import { registerEditFileTool } from "./tools/editor/edit_file.js";
+import { registerGitStatusTool } from "./tools/git/git_status.js";
+import { registerGitLogTool } from "./tools/git/git_log.js";
+import { registerGitShowTool } from "./tools/git/git_show.js";
+import { registerGitDiffTool } from "./tools/git/git_diff.js";
+import { registerGitBlameTool } from "./tools/git/git_blame.js";
+import { registerExecuteCommandTool } from "./tools/exec/execute_command.js";
+import { registerRunPythonTool } from "./tools/exec/run_python.js";
+import { registerRunPytestTool } from "./tools/exec/run_pytest.js";
+import { registerFindCommandTool } from "./tools/system/find_command.js";
+import { registerCheckEnvTool } from "./tools/system/check_env.js";
+import { registerFetchUrlTool } from "./tools/network/fetch_url.js";
 
 export function createServer(config: ResolvedConfig): McpServer {
   const server = new McpServer({
@@ -50,6 +61,23 @@ export function createServer(config: ResolvedConfig): McpServer {
   registerDiffFilesTool(server, config);
   registerReadSinceTool(server, config);
   registerEditFileTool(server, config);
+
+  // v0.5 git read-only
+  registerGitStatusTool(server, config);
+  registerGitLogTool(server, config);
+  registerGitShowTool(server, config);
+  registerGitDiffTool(server, config);
+  registerGitBlameTool(server, config);
+
+  // v0.5 exec
+  registerExecuteCommandTool(server, config);
+  registerRunPythonTool(server, config);
+  registerRunPytestTool(server, config);
+
+  // v0.5 system + network
+  registerFindCommandTool(server, config);
+  registerCheckEnvTool(server, config);
+  registerFetchUrlTool(server, config);
 
   return server;
 }
