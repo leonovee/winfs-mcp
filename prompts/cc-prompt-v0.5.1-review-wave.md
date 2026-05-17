@@ -2,13 +2,15 @@
 
 > **Audience:** Claude Code launched from `C:\Users\Expert\Desktop\AI\ai-judge` (per v0.3 review precedent — reviewer subagents live in `.claude/agents/` there). winfs project tree at `C:\Users\Expert\Desktop\AI\tools\winfs\` must also be inside CC's accessible paths.
 >
-> **Context:** v0.5.0 shipped 2026-05-17 (tag `v0.5.0` → commit `2dc2a89`). Per operator directive (2026-05-17): single batched review wave post-tag, **4 surfaces × 4 reviewers = 16 subagent invocations**. Findings → v0.5.1 / v0.5.2 / v0.5.3 patch waves per audit_tail v0.3.x precedent.
+> **Context:** v0.5.1 is the canonical v0.5 ship (tag `v0.5.1` → commit `71ad8a6`). The earlier `v0.5.0` tag (commit `2dc2a89`) is a phantom — it predates the 11 v0.5 tool implementations and carries only v0.1–v0.4 surface. **Reviewers MUST clone `--branch v0.5.1`, not `v0.5.0`**, or the source files this prompt references will not be present in their working tree. Per operator directive (2026-05-17): single batched review wave post-tag, **4 surfaces × 4 reviewers = 16 subagent invocations**. Findings → v0.5.2 / v0.5.3 / v0.5.4 patch waves per audit_tail v0.3.x precedent.
 >
 > **Supersedes:** `prompts/cc-prompt-phase-4b-external-reviews.md` (which covered only grep + edit_file, 2 surfaces × 4 = 8 invocations). This prompt expands scope to all 4 mutation/network surfaces.
 
 ---
 
 ## 0. Preconditions
+
+**Tag clarification:** reviewers clone `--branch v0.5.1`, not `v0.5.0`, because `v0.5.0` carries only v0.1–v0.4 surface (see context note above). All file paths below refer to a working tree at the `v0.5.1` tag (commit `71ad8a6`) or later.
 
 Verify before starting:
 
@@ -20,7 +22,7 @@ Verify before starting:
    - `_review_execute_command.prompt.md` (~22.2 KB)
    - `_review_fetch_url.prompt.md` (~33.0 KB)
 
-   If any missing — stop, report. The chat Claude wrote these post-v0.5.0; they should all be committed on `main` at HEAD `5cdb6c1` or later.
+   If any missing — stop, report. The chat Claude wrote these post-v0.5.1; they should all be committed on `main` at the `v0.5.1` tag commit (`71ad8a6`) or later.
 
 3. **All 4 source files on disk** (the review prompts inline excerpts, but reviewers may want to cross-reference):
    - `src/tools/search/grep.ts`
@@ -239,7 +241,7 @@ Once consolidation files exist:
 2. Per surface, walks through P1 → P2 → P3 findings
 3. For each finding: accept / reject with spec citation / defer to v1.0
 4. Generate ordered fix-commit list per surface
-5. Operator commits fixes (or chat Claude commits directly via winfs:execute_command pattern established in v0.5.0)
+5. Operator commits fixes (or chat Claude commits directly via winfs:execute_command pattern established in v0.5.1)
 6. Re-test (full `npm test`)
 7. Tag v0.5.1 / v0.5.2 / v0.5.3 as findings batch closes
 8. Inspector smoke run only if mutation-surface findings landed (execute_command, fetch_url fixes); skip for grep/edit_file (read-only enough)
