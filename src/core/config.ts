@@ -17,6 +17,14 @@ const CONFIG_SCHEMA = z
     fetchUrlTimeoutMs: z.number().int().positive().default(15_000),
     readMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),
     maxDiffBytes: z.number().int().positive().default(256 * 1024),
+    // v0.5: execute_command / run_python / run_pytest output cap (per stream)
+    execMaxOutputBytes: z.number().int().positive().default(1 * 1024 * 1024),
+    // v0.5: additive-only extension of the hardcoded exec blocklist
+    execExtraBlocklist: z.array(z.string()).default([]),
+    // v0.5: python binary lookup root; if set, <pythonHome>/python.exe used
+    pythonHome: z.string().optional(),
+    // v0.5: sanitize subprocess env (drop user $PATH and everything outside USERPROFILE/LOCALAPPDATA)
+    execSanitizeEnv: z.boolean().default(false),
     auditLogPath: z.string().optional(),
     auditLogMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),
   })
@@ -35,7 +43,7 @@ export interface ResolvedConfig extends RawConfig {
   version: string;
 }
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 /**
  * Expand %ENVVAR% sequences (Windows-style) in a path string.
