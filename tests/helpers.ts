@@ -65,11 +65,14 @@ export async function makeTempConfig(): Promise<{ config: ResolvedConfig; root: 
     execExtraBlocklist: [],
     execSanitizeEnv: false,
     pythonHome: detectPythonHome(),
+    unrestrictedFilesystem: false,
+    unrestrictedFilesystemConfirm: undefined,
     auditLogMaxBytes: 1024 * 1024,
     configPath: "<test>",
     resolvedAllowedRoots: [path.normalize(real)],
     resolvedAuditLogPath: auditPath,
     version: "0.1.0-test",
+    serverMode: "strict",
   };
 
   return { config, root: real };

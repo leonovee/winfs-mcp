@@ -9,7 +9,30 @@ export interface AuditRecord {
   result_status: "ok" | "error";
   error_code?: string;
   duration_ms: number;
+  /** v0.6 §U / invariant #30: present on mutation-tool entries (write,
+   *  append, mkdir, move, copy, edit_file, write_chunk, execute_command,
+   *  run_python, run_pytest). Read-only tools omit it. */
+  mode?: "strict" | "unrestricted";
 }
+
+/**
+ * v0.6 invariant #30: mutation tools whose audit entries get the `mode` field.
+ * Read-only tools (read, list, stat, grep, glob, etc.) don't get it — keeps
+ * the audit log lean and makes post-hoc filtering trivial (`mode === "unrestricted"`
+ * pulls every entry that was actually allowed to mutate outside allowedRoots).
+ */
+export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
+  "write",
+  "append",
+  "mkdir",
+  "move",
+  "copy",
+  "edit_file",
+  "write_chunk",
+  "execute_command",
+  "run_python",
+  "run_pytest",
+]);
 
 const SENSITIVE_ARG_KEYS = new Set([
   "content",
@@ -100,6 +123,27 @@ export function appendAudit(config: ResolvedConfig, record: AuditRecord): void {
       const e = err as NodeJS.ErrnoException;
       process.stderr.write(`audit: write failed: ${e?.message ?? String(err)}\n`);
     }
+  });
+}
+
+/**
+ * v0.6 §U / invariant #29: write the `_server_start` sentinel record at server
+ * boot, capturing the serverMode + version + pid. Uses the standard
+ * AuditRecord shape with `tool: "_server_start"` so audit_tail can surface it
+ * without schema gymnastics. Failures are non-fatal (same policy as appendAudit).
+ */
+export function appendServerStartAudit(config: ResolvedConfig): void {
+  appendAudit(config, {
+    ts: new Date().toISOString(),
+    tool: "_server_start",
+    args_summary: {
+      server_mode: config.serverMode,
+      version: config.version,
+      pid: process.pid,
+    },
+    result_status: "ok",
+    duration_ms: 0,
+    mode: config.serverMode,
   });
 }
 

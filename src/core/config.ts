@@ -25,12 +25,25 @@ const CONFIG_SCHEMA = z
     pythonHome: z.string().optional(),
     // v0.5: sanitize subprocess env (drop user $PATH and everything outside USERPROFILE/LOCALAPPDATA)
     execSanitizeEnv: z.boolean().default(false),
+    // v0.6: configurable filesystem scope. When true (and the magic-string
+    // confirm field matches), checkAllowed short-circuits and accepts paths
+    // outside allowedRoots. All other security defenses stay in force. See
+    // spec §U for rationale + threat model.
+    unrestrictedFilesystem: z.boolean().default(false),
+    // v0.6: magic-string confirm required when unrestrictedFilesystem === true.
+    // Must equal exactly `"I-UNDERSTAND-THE-RISK"`. Mismatch → startup fails
+    // with a structured config error. Prevents accidental enable.
+    unrestrictedFilesystemConfirm: z.string().optional(),
     auditLogPath: z.string().optional(),
     auditLogMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),
   })
   .strict();
 
 export type RawConfig = z.infer<typeof CONFIG_SCHEMA>;
+
+/** v0.6 §U: derived from `unrestrictedFilesystem`. "strict" is the default
+ *  (allowedRoots enforced); "unrestricted" is the opt-in mode. */
+export type ServerMode = "strict" | "unrestricted";
 
 export interface ResolvedConfig extends RawConfig {
   /** The path the config was loaded from, or "<defaults>" if synthesised. */
@@ -41,9 +54,15 @@ export interface ResolvedConfig extends RawConfig {
   resolvedAuditLogPath: string;
   /** Server version string baked at startup. */
   version: string;
+  /** v0.6 §U: derived from `unrestrictedFilesystem`. */
+  serverMode: ServerMode;
 }
 
 const VERSION = "0.5.1";
+
+/** v0.6 §U: exact magic string required as `unrestrictedFilesystemConfirm`
+ *  when `unrestrictedFilesystem` is true. Hardcoded; never configurable. */
+const UNRESTRICTED_CONFIRM_MAGIC = "I-UNDERSTAND-THE-RISK";
 
 /**
  * Expand %ENVVAR% sequences (Windows-style) in a path string.
@@ -106,6 +125,23 @@ export async function loadConfig(explicitPath?: string): Promise<ResolvedConfig>
     );
   }
 
+  // v0.6 §U / invariant #28: unrestricted mode requires explicit magic-string
+  // confirm. Without it, accidental enable would silently disable allowedRoots —
+  // the worst possible failure mode. Reject at startup before any tool can run.
+  if (
+    raw.unrestrictedFilesystem &&
+    raw.unrestrictedFilesystemConfirm !== UNRESTRICTED_CONFIRM_MAGIC
+  ) {
+    throw new Error(
+      `Config validation error: unrestrictedFilesystem requires unrestrictedFilesystemConfirm = '${UNRESTRICTED_CONFIRM_MAGIC}' (current value: ${
+        raw.unrestrictedFilesystemConfirm === undefined
+          ? "(unset)"
+          : `'${raw.unrestrictedFilesystemConfirm}'`
+      })`,
+    );
+  }
+  const serverMode: ServerMode = raw.unrestrictedFilesystem ? "unrestricted" : "strict";
+
   const resolvedAllowedRoots: string[] = [];
   for (const root of raw.allowedRoots) {
     const expanded = expandEnv(root);
@@ -130,5 +166,6 @@ export async function loadConfig(explicitPath?: string): Promise<ResolvedConfig>
     resolvedAllowedRoots,
     resolvedAuditLogPath,
     version: VERSION,
+    serverMode,
   };
 }
