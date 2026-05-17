@@ -21,6 +21,13 @@ const InputShape = {
         .object({
           old_str: z.string().min(1, "old_str must be non-empty"),
           new_str: z.string(),
+          /**
+           * v0.6 §W invariant #34: expected occurrence count for this edit.
+           * Default 1 preserves v0.5 contract. 0 = assertion-only (verify
+           * absent, no replacement performed). >=2 = replace ALL occurrences
+           * atomically. Count must match exactly, else EUNIQUE.
+           */
+          expected_count: z.number().int().nonnegative().default(1),
         })
         .strict(),
     )
@@ -119,25 +126,58 @@ export async function editFileImpl(
   }
 
   let buffer = original;
+  // v0.6 §W invariant #34: replacements_made is the SUM of actual replacements
+  // performed across all edits. expected_count: 0 (assertion-only) contributes
+  // 0 to this total even though the edit "passed".
+  let replacementsMade = 0;
   for (let i = 0; i < args.edits.length; i++) {
     const e = args.edits[i]!;
     const occ = countOccurrences(buffer, e.old_str);
-    if (occ !== 1) {
-      return buildError(
-        "EUNIQUE",
-        occ === 0
-          ? `edit[${i}].old_str not found in current buffer`
-          : `edit[${i}].old_str appears ${occ} times; must be exactly 1`,
-        {
-          details: { edit_index: i, occurrences: occ, path: realPath },
-          hint:
-            occ === 0
-              ? "An earlier edit may have removed the target. Edits apply sequentially to the in-memory buffer."
-              : "Provide more surrounding context in old_str to make it unique.",
+    // Default expected_count to 1 at the consumer layer (preserves v0.5
+    // back-compat for direct impl callers that bypass Zod validation, e.g.
+    // unit tests). Zod's .default(1) handles the registered-tool path.
+    const expected = e.expected_count ?? 1;
+    if (occ !== expected) {
+      // v0.6 §W: error message reflects expected count.
+      let message: string;
+      let hint: string;
+      if (expected === 1 && occ === 0) {
+        message = `edit[${i}].old_str not found in current buffer`;
+        hint = "An earlier edit may have removed the target. Edits apply sequentially to the in-memory buffer.";
+      } else if (expected === 1 && occ > 1) {
+        message = `edit[${i}].old_str appears ${occ} times; must be exactly 1`;
+        hint = "Provide more surrounding context in old_str to make it unique, or pass expected_count to assert a specific count.";
+      } else if (expected === 0) {
+        message = `edit[${i}].old_str found ${occ} time(s) but expected_count was 0 (assertion failed: substring must be absent)`;
+        hint = "expected_count: 0 asserts the substring is absent. To allow occurrences and replace them, raise expected_count.";
+      } else {
+        message = `edit[${i}].old_str found ${occ} time(s) but expected_count was ${expected}`;
+        hint = "Adjust expected_count to match the actual occurrence count, or modify old_str to disambiguate.";
+      }
+      return buildError("EUNIQUE", message, {
+        details: {
+          edit_index: i,
+          occurrences_found: occ,
+          expected_count: expected,
+          path: realPath,
         },
-      );
+        hint,
+      });
     }
-    buffer = buffer.replace(e.old_str, e.new_str);
+    if (expected === 0) {
+      // Assertion-only mode: count matched (0), no replacement performed.
+      continue;
+    }
+    if (expected === 1) {
+      // Single-replace path preserves v0.5 semantics + diff cleanliness.
+      buffer = buffer.replace(e.old_str, e.new_str);
+      replacementsMade += 1;
+    } else {
+      // Multi-replace path: split+join replaces ALL occurrences atomically
+      // within the edit (string.replace without /g replaces only the first).
+      buffer = buffer.split(e.old_str).join(e.new_str);
+      replacementsMade += expected;
+    }
   }
 
   const afterBytes = Buffer.byteLength(buffer, "utf8");
@@ -172,7 +212,7 @@ export async function editFileImpl(
 
   const value: EditFileResult = {
     path: realPath,
-    replacements_made: args.edits.length,
+    replacements_made: replacementsMade,
     atomic: true,
     dry_run: args.dry_run,
     diff,
@@ -188,12 +228,21 @@ export function registerEditFileTool(server: McpServer, config: ResolvedConfig):
   server.registerTool(
     "edit_file",
     {
-      title: "Atomic find-and-replace with dry_run and uniqueness invariant",
-      description: `Apply 1..${MAX_EDITS} {old_str, new_str} replacements to a file, atomically.
+      title: "Atomic find-and-replace with dry_run and occurrence-count assertions",
+      description: `Apply 1..${MAX_EDITS} {old_str, new_str, expected_count?} replacements to a file, atomically.
 
-Uniqueness invariant: each \`old_str\` MUST appear exactly once in the current in-memory
-buffer. 0 occurrences or 2+ → EUNIQUE with details.{edit_index, occurrences}. Edits apply
-sequentially — edit N is checked against the buffer AFTER edits 0..N-1.
+Occurrence-count invariant (v0.6 §W): each \`old_str\` MUST appear exactly \`expected_count\`
+times (default 1) in the current in-memory buffer.
+
+  - \`expected_count: 1\` (default, preserves v0.5 contract): replace the single occurrence.
+    0 or 2+ matches → EUNIQUE.
+  - \`expected_count: 0\`: ASSERTION-ONLY. Verify substring is absent; no replacement
+    performed. Any occurrence → EUNIQUE. Useful for "ensure this code is removed" checks.
+  - \`expected_count: N (N >= 2)\`: Replace ALL occurrences atomically (within the edit).
+    Count must match exactly; mismatch → EUNIQUE.
+
+Edits apply sequentially — edit K is checked against the buffer AFTER edits 0..K-1. Error
+details on EUNIQUE include \`{edit_index, occurrences_found, expected_count}\`.
 
 \`dry_run: true\` validates all edits and returns the unified diff without touching disk
 (no temp file is created). \`dry_run: false\` (default) writes atomically via temp+fsync+rename.
@@ -202,11 +251,15 @@ sequentially — edit N is checked against the buffer AFTER edits 0..N-1.
 
 Args:
   - path (string): absolute path inside allowedRoots
-  - edits ({old_str, new_str}[]): 1..${MAX_EDITS} edits. Empty old_str → EINVAL.
+  - edits ({old_str, new_str, expected_count?}[]): 1..${MAX_EDITS} edits. Empty old_str → EINVAL.
   - dry_run (boolean, default false)
 
 Returns: { path, replacements_made, atomic, dry_run, diff }
-Errors: EPERM_ROOT, ENOENT, EISDIR, EUNIQUE (0 or 2+ occurrences), EENCODING (binary/non-UTF-8), ETOOLARGE, EBUSY (locked destination), ETIMEDOUT.
+  - \`replacements_made\` is the sum of actual replacements across all edits.
+    expected_count:0 edits contribute 0 (assertion-only). expected_count:N edits
+    contribute N each.
+
+Errors: EPERM_ROOT, ENOENT, EISDIR, EUNIQUE (occurrence-count mismatch), EENCODING (binary/non-UTF-8), ETOOLARGE, EBUSY (locked destination), ETIMEDOUT.
 
 Audit log records { path, edits_count, dry_run, bytes_before, bytes_after } — old_str and
 new_str content are NEVER persisted (continuation of write/append content redaction).`,

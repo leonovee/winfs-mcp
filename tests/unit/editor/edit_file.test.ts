@@ -82,7 +82,9 @@ describe("tools/editor/edit_file", () => {
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error("expected error");
     expect(res.error.code).toBe("EUNIQUE");
-    expect(res.error.details).toMatchObject({ edit_index: 0, occurrences: 0 });
+    // v0.6 §W: details field renamed `occurrences` → `occurrences_found` and
+    // gained `expected_count` (defaults to 1 for back-compat with v0.5 callers).
+    expect(res.error.details).toMatchObject({ edit_index: 0, occurrences_found: 0, expected_count: 1 });
     // File untouched.
     expect(await fs.readFile(p, "utf8")).toBe("alpha\nbeta\n");
   });
@@ -97,7 +99,7 @@ describe("tools/editor/edit_file", () => {
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error("expected error");
     expect(res.error.code).toBe("EUNIQUE");
-    expect(res.error.details).toMatchObject({ edit_index: 0, occurrences: 3 });
+    expect(res.error.details).toMatchObject({ edit_index: 0, occurrences_found: 3, expected_count: 1 });
     // File untouched.
     expect(await fs.readFile(p, "utf8")).toBe("foo\nfoo\nfoo\n");
   });
@@ -121,7 +123,7 @@ describe("tools/editor/edit_file", () => {
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error("expected error");
     expect(res.error.code).toBe("EUNIQUE");
-    expect(res.error.details).toMatchObject({ edit_index: 1, occurrences: 0 });
+    expect(res.error.details).toMatchObject({ edit_index: 1, occurrences_found: 0, expected_count: 1 });
   });
 
   it("EPERM_ROOT for path outside allowedRoots", async () => {
