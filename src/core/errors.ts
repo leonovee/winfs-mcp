@@ -23,7 +23,9 @@ export type ErrorCode =
   | "ESIZE" // fetch_url: response body > config cap
   | "ENOTFOUND" // find_command: command not in PATH
   | "EPARSE" // run_pytest: output format unrecognized
-  | "EPYTHONNOTFOUND"; // run_python: python binary missing
+  | "EPYTHONNOTFOUND" // run_python: python binary missing
+  // v0.6 — file / editor surface
+  | "EOFFSET"; // write_chunk: offset > file_size_before (sparse-file creation forbidden)
 
 export interface StructuredError {
   ok: false;

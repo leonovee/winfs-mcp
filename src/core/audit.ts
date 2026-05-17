@@ -4,6 +4,11 @@ import type { ResolvedConfig } from "./config.js";
 
 export interface AuditRecord {
   ts: string;
+  /** Tool name. By convention, names beginning with `_` are RESERVED for
+   *  system events emitted by the audit subsystem itself (e.g.
+   *  `_server_start`), NOT real registered tools. audit_tail surfaces these
+   *  alongside regular tool entries; consumers that filter by tool name
+   *  should treat the `_` prefix as the discriminator. */
   tool: string;
   args_summary: Record<string, unknown>;
   result_status: "ok" | "error";
