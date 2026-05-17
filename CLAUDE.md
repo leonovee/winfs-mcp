@@ -67,4 +67,51 @@
 — remote: `https://github.com/leonovee/winfs-mcp`;
 — git на Windows вызывать через абсолютный путь: `& "C:\Program Files\Git\cmd\git.exe"`;
 — у `winfs:execute_command` известный баг (P2): при вызове `& "git.exe" ...` stdout/stderr пустые, но команда выполняется. Состояние проверять через файлы (`.git/refs/heads/main`, `git status`-файл через `Start-Process -RedirectStandardOutput`).
-— `winfs` MCP-сервер иногда зависает на 4 минуты (известный баг транспорта). Перезапуск: `.\scripts\restart-winfs.ps1`.
+— `winfs` MCP-сервер иногда зависает на 4 минуты (известный баг транспорта). Перезапуск: `.\scripts\restart-winfs.ps1` (если работает) или ручной рестарт Claude Desktop через трей.
+
+## MCP-инструменты: когда какой использовать
+
+В Claude Code и в чат-Claude доступны несколько MCP-серверов, работающих с файлами. У каждого свои сильные стороны.
+
+### winfs (наш собственный, этот репо)
+
+Сильные стороны:
+- **атомарная запись** через temp + fsync + rename — целый файл либо записывается, либо нет, без halfway-write при crash;
+- **allowedRoots whitelist** — security boundary, нельзя случайно записать вне разрешённых папок;
+- **audit log** — каждая мутация записывается с redaction чувствительных данных;
+- **SSRF defense** для `fetch_url` (two-layer проверка хостов и IP);
+- **edit_file** со строгим uniqueness check (отлавливает неоднозначные правки на ранней стадии).
+
+### Desktop Commander
+
+Сильные стороны:
+- **`edit_block`** — surgical find/replace, показывает character-diff при near-miss (там где наш `edit_file` сказал бы EUNIQUE без объяснений);
+- **`start_process` + `interact_with_process`** — persistent shell sessions (многошаговые PS/Python REPL);
+- **`start_search`** — async grep с pagination для больших репо;
+- **`read_multiple_files`** — batch read нескольких файлов одним вызовом;
+- **process management** (`list_processes`, `kill_process`);
+- **PDF и Excel** манипуляции.
+
+### Filesystem MCP (`@modelcontextprotocol/server-filesystem`)
+
+Архитектурно близок к DC — read/write/edit примитивы, без exec/process, без специальных safety-инвариантов. В этой сессии не использовался.
+
+### Эвристика выбора
+
+| Задача | Инструмент |
+|---|---|
+| Записать новый `prompts/<имя>.md` | winfs (атомарно) |
+| Записать обновлённый `CLAUDE.md` целиком | winfs |
+| Прочитать src-файл (один или несколько) | DC `read_multiple_files` |
+| Surgical edit в существующем файле | DC `edit_block` (показывает char-diff при near-miss) |
+| Удалить файл / kill процесс | DC `start_process` + PS |
+| Find / grep по репо | DC `start_search` (pagination на большом репо) |
+| Read / list мелочи | любой |
+
+### Наша позиция в roadmap
+
+winfs нацелен в долгосрочной перспективе **превзойти** DC и Filesystem MCP — иначе зачем мы его делаем. Сейчас (после v0.6) winfs впереди по безопасности и атомарности, но позади по эргономике (нет persistent shells, нет async grep с pagination, нет diff на near-miss).
+
+**v0.7 — DC parity wave.** Цели: догнать DC по эргономике, сохранив все наши safety-инварианты. План в файле: `prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md`.
+
+После v0.7 переключение на winfs становится строго better deal — все удобства DC плюс наши защиты.
