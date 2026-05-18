@@ -40,6 +40,10 @@ export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
   // v0.7 wave 1
   "write_json",
   "ssh_exec",
+  // v0.7 wave 2b — process control mutations
+  "start_process",
+  "interact",
+  "kill_process",
 ]);
 
 const SENSITIVE_ARG_KEYS = new Set([

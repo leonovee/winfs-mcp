@@ -35,6 +35,7 @@ import { registerListPathDirsTool } from "./tools/system/list_path_dirs.js";
 import { registerWriteJsonTool } from "./tools/file/write_json.js";
 import { registerSshExecTool } from "./tools/system/ssh_exec.js";
 import { registerListProcessTool } from "./tools/system/list_process.js";
+import { registerStartProcessTool } from "./tools/system/start_process.js";
 
 export interface CreatedServer {
   server: McpServer;
@@ -104,6 +105,7 @@ export function createServer(config: ResolvedConfig): CreatedServer {
 
   // v0.7 wave 2b — process control suite
   registerListProcessTool(server, config, registry);
+  registerStartProcessTool(server, config, registry);
 
   return { server, registry };
 }
