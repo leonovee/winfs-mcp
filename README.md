@@ -273,6 +273,25 @@ Copy-Item configs/default.json configs/local.json
 npx @modelcontextprotocol/inspector node dist/index.js -- --config configs/local.json
 ```
 
+#### `sshExePath` override (for non-standard OpenSSH installs)
+
+By default `ssh_exec` uses `C:\Windows\System32\OpenSSH\ssh.exe`. To
+override — for example to use Git-bundled OpenSSH at
+`C:\Program Files\Git\usr\bin\ssh.exe`, or MSYS2 at
+`C:\msys64\usr\bin\ssh.exe` — add `"sshExePath"` to your local config:
+
+```json
+{
+  "allowedRoots": ["C:\\Users\\me\\src"],
+  "sshExePath": "C:\\Program Files\\Git\\usr\\bin\\ssh.exe"
+}
+```
+
+Note that `configs/local.json` is gitignored; create or edit it as
+needed for your machine. `ssh_exec` returns `ESSHNOTFOUND` if the path
+does not exist on disk, so a typo is caught at the first call rather
+than silently falling back.
+
 ## Tests
 
 ```powershell

@@ -1195,3 +1195,81 @@ New tool under `src/tools/file/write_json.ts`. Atomic JSON write, symmetric to v
 **§X.5. `MUTATION_TOOLS` extension.**
 
 `MUTATION_TOOLS` (audit.ts) grows from 10 to 12 members: `+ write_json + ssh_exec`. `list_path_dirs` is read-only and is NOT added.
+
+### 2026-05-19 — v0.7 wave 2a: §Y existing-tool improvements
+
+**Motivation.** A compact follow-up to wave 1: four improvements to tools already in the surface, plus two documentation hangovers. No new tools. No version bump. Driven by the same ecom-session feedback report (the diff-self-verification entry) plus DC-parity polish items.
+
+**§Y.1. `edit_file` diff opt-out + 16 KB body cap.**
+
+Wave 2a adds an optional `with_diff: boolean` input field (default `true`) plus an optional `truncated_diff: boolean` output field. The `diff` field semantics (v0.4 §I "diff field always populated") are preserved by the default — explicit `with_diff: false` is the new opt-out path, yielding an empty `diff` string for response-size control on large multi-edit batches.
+
+When the unified diff body exceeds 16 384 bytes (UTF-8), it is truncated with a trailing `... [N more bytes truncated]\n` marker and the response carries `truncated_diff: true`. The cap is hardcoded (not configurable) — it bounds the response payload regardless of caller intent. Audit log is unchanged: diff is never persisted.
+
+**§Y.2. `grep` pagination.**
+
+`grep` gains two input fields and three output fields. Inputs: `offset?: number` (default 0) and `limit?: number` (default `MAX_MATCHES_DEFAULT` = 50, hard cap `MAX_MATCHES_HARD_CAP` = 500). `max_matches` is retained as a v0.6 legacy alias — if both `limit` and `max_matches` are supplied, `limit` wins.
+
+Outputs gain `total_matches: number` (count across the entire search, not just the page) and an optional `next_offset?: number` (present iff more results follow the current page). To bound the count work, `total_matches` is capped at a hard ceiling of 10 000; on overflow the response carries `total_matches_capped: true` and the count is a lower bound rather than an exact total. The walk now enumerates all matching files until the ceiling or the deadline is hit — but only the page slice `[offset, offset + limit)` is materialised in the response, so memory stays bounded even with high `total_matches`.
+
+Existing behaviour at defaults is preserved: `offset=0, limit=MAX_MATCHES_DEFAULT` returns the same first-page envelope (plus the new `total_matches` field) as v0.6.
+
+**§Y.3. `execute_command` hints registry.**
+
+A new optional `hints: string[]` output field surfaces short diagnostic paragraphs when child stderr matches a known cryptic-failure pattern. First entry covers PowerShell's `Cannot run a document in the middle of a pipeline` error — agents trying to invoke `ssh.exe` (or other non-PE binaries) through `powershell.exe` get a one-paragraph hint explaining the likely cause (PATHEXT / file association) and a workaround (`cmd`, full path, or a passthrough tool).
+
+Match is case-insensitive substring on the literal phrase. Registry lives in `src/core/exec_hints.ts` and is intentionally append-only: future hints add a new entry with one `marker` + one `hint` string. Raw stderr is NEVER mutated — the hint is purely additive. The `hints` field is OMITTED entirely when no marker matched (envelope cleanliness; not an empty array). The audit log is unchanged — hints are NOT persisted (`stderr_prefix` already captures the verbatim failure).
+
+**§Y.4. ETIMEDOUT response shape examples.**
+
+The timeout-capable tools — `execute_command`, `ssh_exec`, `run_python` — share a common ETIMEDOUT response envelope shape. For agent-side prediction, here is the exact shape each tool returns when the deadline fires.
+
+`execute_command` (timeout surfaces as a flag, not an error — partial output is preserved):
+
+```json
+{
+  "stdout": "first 1234 bytes of stdout...",
+  "stderr": "first 567 bytes of stderr...",
+  "exit_code": null,
+  "duration_ms": 5002,
+  "truncated_stdout": false,
+  "truncated_stderr": false,
+  "timed_out": true
+}
+```
+
+`ssh_exec` (timeout IS an error code, with partial-output details for diagnostics):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "ETIMEDOUT",
+    "message": "ssh_exec exceeded timeout_seconds (30)",
+    "details": {
+      "timeout_seconds": 30,
+      "duration_ms": 30005,
+      "partial_stdout": "first 1024 bytes of partial stdout...",
+      "partial_stderr": "first 1024 bytes of partial stderr..."
+    }
+  }
+}
+```
+
+`run_python` (same envelope shape as `execute_command` — timeout surfaces as a flag plus `duration_ms` near the requested timeout):
+
+```json
+{
+  "stdout": "",
+  "stderr": "partial captured stderr...",
+  "exit_code": null,
+  "duration_ms": 5001,
+  "timed_out": true
+}
+```
+
+Agents predicting timeout shape should switch on tool: `execute_command` and `run_python` return `ok: true` with `timed_out: true`; `ssh_exec` returns `ok: false` with `error.code: "ETIMEDOUT"`. The split mirrors the underlying design intent — interactive shells need partial diagnostics; remote-exec calls fail fast and explicit.
+
+**§Y.5. `sshExePath` override discoverability.**
+
+Wave 1 wired `config.sshExePath` (default `C:\Windows\System32\OpenSSH\ssh.exe`) but did not surface a commented override example, since `configs/local.json` is gitignored. The README "Local working config" section now documents the override explicitly so operators on non-standard ssh installations (Git-bundled at `C:\Program Files\Git\usr\bin\ssh.exe`, MSYS2 at `C:\msys64\usr\bin\ssh.exe`, etc.) know where to put it. No code change — documentation polish only.
