@@ -975,3 +975,123 @@ Semantics:
 - **`n: 0` path.** Returns `entries_seen_total: 0` (early-out before any read).
 
 Implementation: `tailLinesFromHandle` now returns `{entries, scanned}` instead of just `entries`; `auditTailImpl` plumbs `scanned` into the output envelope. The path-based `tailLines` wrapper preserves its previous `Promise<AuditEntry[]>` signature for test back-compat.
+
+### 2026-05-18 — v0.6 §U–§W: configurable scope, write_chunk, edit_file.expected_count
+
+**Motivation.** v0.6 ships three orthogonal additions on top of the v0.5 29-tool surface: (a) opt-in "unrestricted" mode that bypasses `allowedRoots` for agent-sandbox / dev-VM deployments, (b) a byte-offset surgical write tool for huge files, and (c) an occurrence-count assertion extension to `edit_file`. Net +1 tool (30 total) + 1 schema extension. The three sit under §U / §V / §W in chronological-amendment order.
+
+**Cross-cutting BREAKING CHANGES from v0.5.** v0.6 includes two wire-format changes relative to v0.5. Both are flagged in the [0.6.0] CHANGELOG as well:
+
+- **`edit_file` EUNIQUE details field renamed.** v0.5 returned `details: {edit_index, occurrences, path}`. v0.6 returns `details: {edit_index, occurrences_found, expected_count, path}`. Old `occurrences` field removed; no back-compat shim. Justification: occurrence-count assertion semantics (§W) require an `expected_count` field; renaming `occurrences` → `occurrences_found` keeps the new pair symmetric ("how many we found" / "how many you expected") and avoids verbal collision.
+- **`edit_file.replacements_made` semantics changed.** v0.5 returned `args.edits.length` (a value the caller already knew). v0.6 returns the actual sum of replacements performed across all edits. Justification: returning input back to the caller was zero-information; new semantics make the field useful for verifying mixed-mode batches.
+
+**§U. Configurable filesystem scope (`unrestrictedFilesystem` + magic confirm).**
+
+Config additions (`config.ts` Zod schema):
+
+- `unrestrictedFilesystem: boolean` (default `false`).
+- `unrestrictedFilesystemConfirm: string` (optional). Required when `unrestrictedFilesystem === true`, must equal exactly `"I-UNDERSTAND-THE-RISK"`.
+
+Post-parse validator (invariant #28): if `unrestrictedFilesystem === true` and `unrestrictedFilesystemConfirm !== "I-UNDERSTAND-THE-RISK"` → `loadConfig` throws at startup. Accidental enable structurally impossible.
+
+`ResolvedConfig` gains a derived field `serverMode: "strict" | "unrestricted"`, set from `raw.unrestrictedFilesystem` after validation. All call sites that need to distinguish the two modes read `config.serverMode`, not the raw boolean.
+
+**`checkAllowed` short-circuit.** When `config.serverMode === "unrestricted"`, the allowedRoots prefix check is SKIPPED. The path is still canonicalised via `fs.realpath` (handles symlinks, relative→absolute, `..` resolution), and `allowMissing` semantics + `ENOENT` rejection on missing files are preserved. No `EPERM_ROOT` is ever returned in unrestricted mode.
+
+All other security defenses stay in force regardless of mode: exec blocklist (#7), `check_env` safe-prefix (#8), `fetch_url` SSRF defense (#10), audit redaction (#11), atomic writes, bounded timeouts.
+
+**Startup banner (invariant #29).** When `serverMode === "unrestricted"`, `index.ts` prints a 3-line stderr banner BEFORE server connect:
+
+```
+⚠️ ⚠️ ⚠️  UNRESTRICTED FILESYSTEM MODE — all paths accessible
+⚠️ ⚠️ ⚠️  Confirm: "I-UNDERSTAND-THE-RISK"
+⚠️ ⚠️ ⚠️  See docs/design/mcp-winfs-spec.md §U
+```
+
+The ready line printed after `server.connect` always includes `mode=strict|unrestricted` so the mode is visible in any stderr-tailing dashboard.
+
+**Audit `_server_start` sentinel record (invariant #29).** After `server.connect`, `index.ts` calls `appendServerStartAudit(config)`, writing one record with `tool: "_server_start"`, `args_summary: {server_mode, version, pid}`, `result_status: "ok"`, `duration_ms: 0`, `mode: <serverMode>`.
+
+The `_` prefix on `tool` marks this as a system event (not a registered tool). **Convention:** tool names beginning with `_` are RESERVED for audit-subsystem events. Real tools never use this prefix. `audit_tail` surfaces these alongside regular tool entries; consumers filtering by tool name should treat the `_` prefix as the discriminator.
+
+**Audit `mode` field on mutation tools (invariant #30).** `AuditRecord` gains an optional top-level `mode?: "strict" | "unrestricted"` field. The wrapper (`tool_wrapper.ts`) sets it for every tool in `MUTATION_TOOLS = {"write", "append", "mkdir", "move", "copy", "edit_file", "write_chunk", "execute_command", "run_python", "run_pytest"}`. Read-only tools (`read`, `list`, `stat`, `grep`, `glob`, `git_*`, `read_*`, etc.) omit the `mode` field for log brevity. Post-hoc forensic queries can filter on `mode === "unrestricted"` to extract every mutation that ran outside allowedRoots.
+
+**Security note.** Unrestricted mode is for development sandboxes, automated agent VMs, and environments where filesystem-wide access is the explicit goal. **NEVER** use in production on a multi-tenant host. **NEVER** use when the server is exposed to untrusted callers. The magic-confirm mechanism prevents accidental enable; it does NOT make the mode safe for adversarial environments.
+
+**§V. `write_chunk` tool contract.**
+
+New tool under `src/tools/file/write_chunk.ts`. Companion to v0.1 `read` (which supports `range`). Designed for surgical edits on large files without loading them whole. **Explicitly non-atomic** — see invariant #31.
+
+**Input schema:**
+
+- `path: string` (absolute, inside allowedRoots in strict mode / anywhere in unrestricted).
+- `offset: number` (≥ 0, byte offset).
+- `content: string` (payload, decoded per `encoding`).
+- `encoding?: "utf8" | "base64"` (default `"utf8"`).
+- `validate_byte_range?: boolean` (default `true`, UTF-8 boundary check; ignored when `encoding === "base64"`).
+
+**Output schema:**
+
+- `path: string` (resolved real path).
+- `offset: number` (echo of input).
+- `bytes_written: number` (per `fileHandle.write` return).
+- `total_bytes_after: number` (post-write `fs.stat.size`).
+- `atomic: false` (literal — pinned by invariant #31).
+
+**Behavior.** `fs.stat(path)` → check `offset <= file_size_before` (else `EOFFSET`) → if `encoding=utf8` + `validate_byte_range`: probe byte at `offset` and byte at `offset + content_length` in the existing file, reject if either is a UTF-8 continuation byte (`(byte & 0xC0) === 0x80`) → `fs.open(path, "r+")` → `fileHandle.write(buf, 0, len, offset)` → `fileHandle.close()` → re-stat for `total_bytes_after`.
+
+The write may naturally extend the file when `offset + content_length > file_size_before`. Sparse-file creation is forbidden by invariant #32 — the offset must always be `<= file_size_before`.
+
+**Errors.**
+
+- `EPERM_ROOT` — strict mode + path outside allowedRoots.
+- `ENOENT` — file does not exist. `write_chunk` does **not** create files. Use `write` for new files.
+- `EISDIR` — path is a directory.
+- `EOFFSET` — `offset > file_size_before` (invariant #32). New error code in v0.6 catalog.
+- `EENCODING` — content is not valid UTF-8 (utf8 mode + content round-trip fails), OR boundary at `offset` / `offset + content_length` lands mid-multibyte (invariant #33). Hint suggests `validate_byte_range: false` to bypass the boundary check when binary-into-utf8 splice is intentional.
+- `ETOOLARGE` — `max(file_size_before, offset + content_length) > readMaxBytes`.
+- `ETIMEDOUT` — wrapper deadline.
+
+**Invariant #31 — non-atomicity is explicit.** Response carries `atomic: false` as a literal (not a generic boolean). No temp file is created; no `fsync` is called; no atomic rename is performed. The mutation happens on the original inode directly. Pinned by `tests/invariants/write_chunk_nonatomic.test.ts`. Future refactoring cannot silently introduce atomic-write semantics without breaking the contract.
+
+**Invariant #32 — offset bounded; no sparse-file creation.** `offset > file_size_before` → `EOFFSET` before any write attempt. `offset === file_size_before` is the append-at-EOF path and is allowed. `offset < file_size_before` overwrites bytes in place and may extend the file if `content_length` is large enough.
+
+**Invariant #33 — UTF-8 boundary check.** When `encoding === "utf8"` (default) and `validate_byte_range === true` (default), both the boundary at `offset` and the boundary at `offset + content_length` in the EXISTING file must NOT be UTF-8 continuation bytes (`0x80..0xBF`). Mid-multibyte boundaries → `EENCODING` with the offending byte in `details`. Prevents producing a file that is valid UTF-8 before and after the chunk but corrupted at the seam. Skipped when `validate_byte_range === false` or `encoding === "base64"`.
+
+**Audit redaction.** The `content` field is redacted in `args_summary` per the v0.4 sensitive-args sanitizer (`<redacted: N bytes>`). The `auditExtras` callback adds: `offset` (full), `content_length` (full), `content_prefix` (first 256 chars), `truncated_at: 256`, `mode` (per invariant #30). Full content is NEVER persisted to the audit log. Same redaction policy as `edit_file.edits[].new_str`.
+
+**§W. `edit_file.edits[].expected_count` extension.**
+
+New optional field on each edit:
+
+- `expected_count?: number` (non-negative integer, default `1`).
+
+**Three modes** (invariant #34 — count match is exact, not minimum):
+
+- `expected_count: 1` (default). Preserves the v0.5 contract: `old_str` must appear EXACTLY once; replace the single occurrence. 0 occurrences or 2+ → `EUNIQUE`.
+- `expected_count: 0`. ASSERTION-ONLY mode. Verify `old_str` is ABSENT from the buffer (count must equal 0); no replacement is performed. Any occurrence → `EUNIQUE`. Useful for "ensure this code is removed" assertions in mixed-mode batches.
+- `expected_count: N` (N ≥ 2). Multi-occurrence replace. `old_str` must appear EXACTLY N times; all occurrences replaced atomically within the edit (impl: `buffer.split(old).join(new)`). Mismatch → `EUNIQUE`.
+
+**Sequential application unchanged.** Edits apply in array order; edit K is checked against the buffer AFTER edits 0..K-1. A multi-replace edit (N ≥ 2) performs all its replacements before the next edit is checked.
+
+**`EUNIQUE` error details shape (BREAKING from v0.5).**
+
+```ts
+details: {
+  edit_index: <0-based index into edits[]>,
+  occurrences_found: <actual count in buffer>,
+  expected_count: <what was requested, default 1>,
+  path: <resolved>,
+}
+```
+
+v0.5 field `occurrences` removed; no back-compat shim. Callers parsing the old field name must migrate.
+
+**`replacements_made` semantics (BREAKING from v0.5).**
+
+- v0.5: `replacements_made === args.edits.length` (a value the caller already knew).
+- v0.6: `replacements_made === sum of actual replacements performed across all edits`. Per-edit contribution: `expected_count: 0` → 0; `expected_count: 1` → 1; `expected_count: N` (N ≥ 2) → N.
+
+Example: a 3-edit batch with `expected_count` of `[2, 1, 5]` reports `replacements_made: 8`, not `3`.
+
+`dry_run: true` still reports `replacements_made` matching what would have been written. The diff is computed against the post-replacement buffer regardless of `dry_run`.
