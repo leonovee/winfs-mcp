@@ -37,6 +37,7 @@ import { registerSshExecTool } from "./tools/system/ssh_exec.js";
 import { registerListProcessTool } from "./tools/system/list_process.js";
 import { registerStartProcessTool } from "./tools/system/start_process.js";
 import { registerInteractTool } from "./tools/system/interact.js";
+import { registerKillProcessTool } from "./tools/system/kill_process.js";
 
 export interface CreatedServer {
   server: McpServer;
@@ -108,6 +109,7 @@ export function createServer(config: ResolvedConfig): CreatedServer {
   registerListProcessTool(server, config, registry);
   registerStartProcessTool(server, config, registry);
   registerInteractTool(server, config, registry);
+  registerKillProcessTool(server, config, registry);
 
   return { server, registry };
 }
