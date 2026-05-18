@@ -5,8 +5,10 @@ import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import { checkAllowed } from "../../core/allowed_roots.js";
-import { checkExecBlocklist, spawnSubprocess } from "../../core/exec_safety.js";
+import { checkExecBlocklist } from "../../core/exec_safety.js";
+import * as execSafety from "../../core/exec_safety.js";
 import { resolveTimeoutMs } from "../../core/timeouts.js";
+import { diagnoseHints } from "../../core/exec_hints.js";
 import { AbsolutePath } from "../../schemas/common.js";
 
 const MAX_COMMAND_LEN = 8 * 1024;
@@ -38,6 +40,7 @@ const OutputShape = {
   truncated_stdout: z.boolean(),
   truncated_stderr: z.boolean(),
   timed_out: z.boolean(),
+  hints: z.array(z.string()).optional(),
 } as const;
 
 interface ExecuteCommandResult extends Record<string, unknown> {
@@ -48,6 +51,7 @@ interface ExecuteCommandResult extends Record<string, unknown> {
   truncated_stdout: boolean;
   truncated_stderr: boolean;
   timed_out: boolean;
+  hints?: string[];
 }
 
 interface ExecAuditExtras {
@@ -116,7 +120,10 @@ export async function executeCommandImpl(
   const bin = process.platform === "win32" ? "powershell.exe" : "pwsh";
   const psArgs = ["-NoProfile", "-NonInteractive", "-Command", composed];
 
-  const spawnRes = await spawnSubprocess({
+  // Note: dispatched through the namespace object so test suites can
+  // `vi.spyOn(execSafety, "spawnSubprocess").mockResolvedValue(...)`. A direct
+  // named-import binding would not be redirected by the spy.
+  const spawnRes = await execSafety.spawnSubprocess({
     bin,
     args: psArgs,
     cwd,
@@ -136,6 +143,11 @@ export async function executeCommandImpl(
     });
   }
 
+  // v0.7 wave 2a: surface diagnostic hints for known cryptic stderr signatures.
+  // Raw stderr is never mutated; hints land in a new envelope field. Field is
+  // omitted entirely when no marker matched (envelope cleanliness).
+  const hints = diagnoseHints(spawnRes.stderr);
+
   const value: ExecuteCommandResult = {
     stdout: spawnRes.stdout,
     stderr: spawnRes.stderr,
@@ -144,6 +156,7 @@ export async function executeCommandImpl(
     truncated_stdout: spawnRes.truncatedStdout,
     truncated_stderr: spawnRes.truncatedStderr,
     timed_out: spawnRes.timedOut,
+    ...(hints.length > 0 ? { hints } : {}),
   };
   auditByResult.set(value, {
     composed_prefix: composed.slice(0, 64),
@@ -184,7 +197,11 @@ Args:
   - cwd (string, optional): defaults to allowedRoots[0]
   - timeout_ms (number, optional)
 
-Returns: { stdout, stderr, exit_code, duration_ms, truncated_stdout, truncated_stderr, timed_out }
+Returns: { stdout, stderr, exit_code, duration_ms, truncated_stdout, truncated_stderr, timed_out, hints? }
+  - \`hints\` is an array of short diagnostic strings when stderr matches a known
+    cryptic-failure signature (e.g. PowerShell's "Cannot run a document in the
+    middle of a pipeline"). Field is absent when nothing matched. Raw stderr
+    is never mutated.
 
 Errors: EPERM_ROOT (cwd outside roots), ENOTDIR (cwd not a directory),
 EBLOCKED (blocklist hit, see details.pattern), EIO (spawn failure),
