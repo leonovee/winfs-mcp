@@ -59,7 +59,10 @@ describe("invariant: serverMode === 'unrestricted' bypasses allowedRoots check",
 
   it("audit log: mutation tool entry includes `mode` field; read-only entry omits it", async () => {
     // Drive `write` (mutation) and `read` (read-only) through the wrapper to
-    // exercise the actual audit-record construction path.
+    // exercise the actual audit-record construction path. This case verifies
+    // the WRITER side: the right bytes land on disk. Reader side is pinned by
+    // the next case via auditTailImpl directly — both must pass or the field
+    // is dead end-to-end.
     const writeTarget = path.join(root, "wmode.txt");
     await runTool({ tool: "write", config: strict }, {
       path: writeTarget,
@@ -85,6 +88,77 @@ describe("invariant: serverMode === 'unrestricted' bypasses allowedRoots check",
     expect(readRec).toBeDefined();
     expect(writeRec.mode).toBe("strict");
     expect(readRec.mode).toBeUndefined();
+  });
+
+  it("audit READER (audit_tail) surfaces `mode` field — regression for v0.6 smoke finding", async () => {
+    // Phase 6a wrote `mode` on disk but audit_tail's AuditEntry Zod schema
+    // didn't include `mode`. zod's safeParse stripped it during the backward
+    // scan, so forensic queries via audit_tail returned entries with mode:
+    // undefined even though the bytes on disk were correct. The previous
+    // writer-side invariant test passed because it bypassed audit_tail and
+    // read fs.readFile directly — exactly the gap this regression closes.
+    const { auditTailImpl } = await import("../../src/tools/system/audit_tail.js");
+
+    // Test BOTH modes in one shot.
+    const unrestricted: ResolvedConfig = { ...strict, serverMode: "unrestricted" };
+
+    const writeTargetStrict = path.join(root, "regression-write-strict.txt");
+    await runTool({ tool: "write", config: strict }, {
+      path: writeTargetStrict,
+      content: "x",
+      overwrite: true,
+      mkdirParents: false,
+    }, (a) => writeImpl(
+      a as { path: string; content: string; overwrite: boolean; mkdirParents: boolean },
+      strict,
+    ));
+
+    const writeTargetUnrestricted = path.join(root, "regression-write-unrestricted.txt");
+    await runTool({ tool: "write", config: unrestricted }, {
+      path: writeTargetUnrestricted,
+      content: "y",
+      overwrite: true,
+      mkdirParents: false,
+    }, (a) => writeImpl(
+      a as { path: string; content: string; overwrite: boolean; mkdirParents: boolean },
+      unrestricted,
+    ));
+    // One read-only call too, so the omitted-on-read-only contract is also
+    // re-checked via audit_tail (not just fs.readFile).
+    await runTool({ tool: "read", config: strict }, { path: writeTargetStrict }, (a) =>
+      readImpl(a as { path: string }, strict),
+    );
+    await flushAudit();
+
+    const res = await auditTailImpl({ n: 50 }, strict);
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected ok");
+
+    // Find the latest write entries via audit_tail (not raw fs).
+    const writeEntries = res.value.entries.filter(
+      (e) => e.tool === "write",
+    );
+    const readEntries = res.value.entries.filter((e) => e.tool === "read");
+    expect(writeEntries.length).toBeGreaterThanOrEqual(2);
+
+    // The strict write recorded mode:"strict" — must survive zod parse.
+    const strictWrite = writeEntries.find(
+      (e) => (e.args_summary as { path?: string })?.path === writeTargetStrict,
+    );
+    expect(strictWrite).toBeDefined();
+    expect(strictWrite?.mode).toBe("strict");
+
+    // The unrestricted write recorded mode:"unrestricted" — must survive.
+    const unrestrictedWrite = writeEntries.find(
+      (e) => (e.args_summary as { path?: string })?.path === writeTargetUnrestricted,
+    );
+    expect(unrestrictedWrite).toBeDefined();
+    expect(unrestrictedWrite?.mode).toBe("unrestricted");
+
+    // Read entry still omits mode end-to-end.
+    expect(readEntries.length).toBeGreaterThanOrEqual(1);
+    const readEntry = readEntries[readEntries.length - 1];
+    expect(readEntry?.mode).toBeUndefined();
   });
 
   it("audit log: server_start sentinel record carries server_mode in args_summary", async () => {
