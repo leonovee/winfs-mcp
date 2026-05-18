@@ -12,6 +12,7 @@ import { AbsolutePath } from "../../schemas/common.js";
 
 const MAX_EDITS = 50;
 const DEFAULT_CONTEXT = 3;
+const DIFF_BODY_CAP_BYTES = 16 * 1024;
 
 const InputShape = {
   path: AbsolutePath,
@@ -37,6 +38,12 @@ const InputShape = {
     .boolean()
     .default(false)
     .describe("If true, validate + compute diff but do not write to disk."),
+  with_diff: z
+    .boolean()
+    .default(true)
+    .describe(
+      "If true (default), the response carries the unified diff body. Pass `false` to suppress the diff on large edits where only success/replacements_made matter.",
+    ),
 } as const;
 
 export const InputSchema = z.object(InputShape).strict();
@@ -48,6 +55,7 @@ const OutputShape = {
   atomic: z.boolean(),
   dry_run: z.boolean(),
   diff: z.string(),
+  truncated_diff: z.boolean().optional(),
 } as const;
 
 interface EditFileResult extends Record<string, unknown> {
@@ -56,6 +64,7 @@ interface EditFileResult extends Record<string, unknown> {
   atomic: boolean;
   dry_run: boolean;
   diff: string;
+  truncated_diff?: boolean;
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -187,14 +196,32 @@ export async function editFileImpl(
     });
   }
 
-  const diff = createPatch(
-    realPath,
-    original,
-    buffer,
-    "before",
-    "after",
-    { context: DEFAULT_CONTEXT },
-  );
+  // v0.7 wave 2a: opt-out of diff body via `with_diff: false` to keep response
+  // size bounded on large edits. When enabled, cap the body at DIFF_BODY_CAP_BYTES
+  // and surface a `truncated_diff: true` flag rather than returning a multi-MB
+  // payload an agent will mostly ignore.
+  // Default true at the impl layer (preserves v0.4 §I "diff field always populated"
+  // for back-compat with direct impl callers that bypass Zod validation, e.g.
+  // unit tests). Zod's .default(true) handles the registered-tool path.
+  const withDiff = args.with_diff ?? true;
+  let diff = "";
+  let truncatedDiff = false;
+  if (withDiff) {
+    diff = createPatch(
+      realPath,
+      original,
+      buffer,
+      "before",
+      "after",
+      { context: DEFAULT_CONTEXT },
+    );
+    if (Buffer.byteLength(diff, "utf8") > DIFF_BODY_CAP_BYTES) {
+      const head = Buffer.from(diff, "utf8").subarray(0, DIFF_BODY_CAP_BYTES).toString("utf8");
+      const dropped = Buffer.byteLength(diff, "utf8") - Buffer.byteLength(head, "utf8");
+      diff = `${head}... [${dropped} more bytes truncated]\n`;
+      truncatedDiff = true;
+    }
+  }
 
   if (!args.dry_run) {
     try {
@@ -216,6 +243,7 @@ export async function editFileImpl(
     atomic: true,
     dry_run: args.dry_run,
     diff,
+    ...(truncatedDiff ? { truncated_diff: true } : {}),
   };
   auditByResult.set(value, {
     bytes_before: stat.size,
@@ -253,11 +281,15 @@ Args:
   - path (string): absolute path inside allowedRoots
   - edits ({old_str, new_str, expected_count?}[]): 1..${MAX_EDITS} edits. Empty old_str → EINVAL.
   - dry_run (boolean, default false)
+  - with_diff (boolean, default true): when false, response \`diff\` is empty and \`truncated_diff\`
+    is absent. Use for large edits where only success/replacements_made is needed.
 
-Returns: { path, replacements_made, atomic, dry_run, diff }
+Returns: { path, replacements_made, atomic, dry_run, diff, truncated_diff? }
   - \`replacements_made\` is the sum of actual replacements across all edits.
     expected_count:0 edits contribute 0 (assertion-only). expected_count:N edits
     contribute N each.
+  - \`diff\` is capped at ${DIFF_BODY_CAP_BYTES} bytes; overflow truncates with a trailing
+    \`... [N more bytes truncated]\\n\` marker and sets \`truncated_diff: true\`.
 
 Errors: EPERM_ROOT, ENOENT, EISDIR, EUNIQUE (occurrence-count mismatch), EENCODING (binary/non-UTF-8), ETOOLARGE, EBUSY (locked destination), ETIMEDOUT.
 
