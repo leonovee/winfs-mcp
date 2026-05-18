@@ -29,7 +29,10 @@ export type ErrorCode =
   // v0.7 wave 1 — ssh + write_json
   | "ESSHNOTFOUND" // ssh_exec: sshExePath does not exist on disk
   | "EHOST_UNKNOWN" // ssh_exec: host not resolvable via ssh -G (not in ~/.ssh/config)
-  | "EEXT_NOT_JSON"; // write_json: path does not end in .json (case-insensitive)
+  | "EEXT_NOT_JSON" // write_json: path does not end in .json (case-insensitive)
+  // v0.7 wave 2b — process control suite
+  | "ENOSESSION" // start_process / interact / kill_process: session_id not in registry
+  | "EPIPE_CLOSED"; // interact: stdin already closed (finalize prior, or child settled)
 
 export interface StructuredError {
   ok: false;

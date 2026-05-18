@@ -39,6 +39,13 @@ const CONFIG_SCHEMA = z
     // if the path doesn't exist, the tool still registers but every call
     // returns ESSHNOTFOUND.
     sshExePath: z.string().default("C:\\Windows\\System32\\OpenSSH\\ssh.exe"),
+    // v0.7 wave 2b — process control registry tunables. Sessions stay
+    // in the in-memory registry for `processSessionTtlMs` after they
+    // settle so late `interact` calls can still fetch final output.
+    processMaxConcurrent: z.number().int().positive().default(16),
+    processBufferCap: z.number().int().positive().default(1 * 1024 * 1024),
+    processSessionTtlMs: z.number().int().positive().default(60_000),
+    processGcIntervalMs: z.number().int().positive().default(10_000),
     auditLogPath: z.string().optional(),
     auditLogMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),
   })
