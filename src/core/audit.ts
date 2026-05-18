@@ -57,6 +57,8 @@ const SENSITIVE_ARG_KEYS = new Set([
   "url", // fetch_url: query string may carry tokens; tool's auditExtras gives a smarter view
   // v0.7 wave 1
   "value", // write_json: arbitrary JSON-serialisable payload (may carry secrets)
+  // v0.7 wave 2b
+  "input", // interact: stdin bytes written to a long-running child (passwords, tokens)
 ]);
 
 /**
