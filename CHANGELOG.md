@@ -3,6 +3,96 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased] — v0.7 wave 1
+
+Three additions from the 2026-05-18 ecom-session consumer-agent feedback
+report (full report archived in the appendix of
+`prompts/cc-prompt-v0.7-wave1-ssh-listpath-writejson.md`). Net +3 tools
+(30 → 33 surface). Ships ahead of the main v0.7 DC-parity wave (features
+A–D in the roadmap). No version bump in this wave — `[Unreleased]` only.
+
+### Added — new tools (3)
+
+- **`ssh_exec`** — first-class SSH remote execution. Spawns `ssh.exe`
+  directly via `child_process.spawn` against the absolute path in
+  `config.sshExePath` (default `C:\\Windows\\System32\\OpenSSH\\ssh.exe`).
+  No shell, no PowerShell wrapper. Host whitelist via `ssh -G` against
+  `~/.ssh/config`; raw `user@host` rejected. 4 KB per-stream output cap;
+  `timeout_seconds` default 30, max 300 (clamped by `config.maxTimeoutMs`).
+  Sidesteps three stacked execute_command failures on Windows: PATH
+  sanitization hiding `System32\\OpenSSH`, PowerShell rejecting `ssh.exe`
+  in pipelines, and known-bug #2 (silent stdout via execute_command).
+  Spec amendment §X.1 / invariant #35. New error codes:
+  - `ESSHNOTFOUND`: `sshExePath` does not exist on disk.
+  - `EHOST_UNKNOWN`: host not resolvable via `ssh -G` (or raw `user@host`
+    form rejected).
+  - `EIO` + `spawnFailed: true` on async spawn error (mirror of v0.6 §U
+    `exec_safety` fix).
+- **`list_path_dirs`** — read-only introspection of the sanitized PATH
+  array that `execute_command` / `find_command` / `run_python` /
+  `run_pytest` / `ssh_exec` inherit. Lets agents debug "why is binary X
+  invisible" without trial-and-error. No input args; output
+  `{ path_dirs: string[], total: number }`. Backed by a new
+  `sanitizedPathDirs(config)` helper extracted from `exec_safety.ts`
+  (single source of truth; `sanitizedPath(config)` joins this with `;`).
+  Spec §X.2.
+- **`write_json`** — atomic JSON write, symmetric to v0.3 `read_json`.
+  `path` must end in `.json` (case-insensitive, validated on both
+  caller-supplied path and realpath-resolved path). `value: unknown` is
+  `JSON.stringify`-d with `indent` 0..10 (default 2); trailing newline
+  appended; atomic temp + fsync + rename. `overwrite: false` by default
+  (safer than v0.1 `write`). Output `{ bytes_written, lines_written, created }`
+  matches `write`. Spec §X.3. New error code:
+  - `EEXT_NOT_JSON`: path does not end in `.json` (case-insensitive).
+    Caught before any disk I/O. Use `write` for non-JSON files.
+
+### Added — infrastructure
+
+- New config field `sshExePath: string` (Zod schema, default
+  `C:\\Windows\\System32\\OpenSSH\\ssh.exe`). No magic-confirm gate —
+  ssh_exec's security boundary is the user's ssh config, not the binary
+  path.
+- `MUTATION_TOOLS` extended with `write_json` and `ssh_exec` (10 → 12).
+  `list_path_dirs` is read-only and is NOT added.
+- `SENSITIVE_ARG_KEYS` extended with `value` (for `write_json`).
+  `sanitizeArgs` redaction extended to handle objects at sensitive keys
+  as `<redacted: N keys>`, symmetric with the existing
+  `array → <redacted: N items>` rule. Safe for pre-wave tools because
+  none of them passed an object at a sensitive key.
+- New error codes: `ESSHNOTFOUND`, `EHOST_UNKNOWN`, `EEXT_NOT_JSON`
+  (catalog spec §X.4).
+
+### Added — documentation
+
+- README "Known limitations" section (added in the docs-first Phase A
+  of this wave): audit-log content-truncation policy + remote-exec gap
+  resolved by `ssh_exec`.
+- Spec amendment §X (`docs/design/mcp-winfs-spec.md`).
+- Roadmap (`prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md`) gained a
+  "Consumer-agent feedback adds (2026-05-18 ecom session)" section
+  between Feature D and the Hard-invariants preview; planned §X–§AA
+  shifted to §Y–§AB to make room.
+
+### Tests
+
+- `tests/unit/system/list_path_dirs.test.ts` (4): non-empty array,
+  joins to `sanitizedPath`, `pythonHome` round-trip, omission when
+  `pythonHome` unset.
+- `tests/unit/file/write_json.test.ts` (14): create new, EEXIST when
+  `overwrite=false`, overwrite=true replaces, EEXT_NOT_JSON for
+  `.txt`, case-insensitive `.JSON`, round-trip with `read_json`,
+  indent 0 compact / indent 2 pretty, EPERM_ROOT outside roots,
+  EINVAL for circular ref / BigInt / top-level function, mkdirParents
+  on / off.
+- `tests/unit/system/ssh_exec.test.ts` (9, all `child_process.spawn`
+  mocked via `vi.mock` on `exec_safety`): ESSHNOTFOUND missing binary,
+  EHOST_UNKNOWN raw `user@host`, EHOST_UNKNOWN ssh -G non-zero,
+  EHOST_UNKNOWN missing hostname line, EIO async spawn error (mirrors
+  v0.6 fix), ETIMEDOUT with partial output, happy path
+  `[host, command]` argv, truncated_stdout flag, validation cache.
+- `tests/invariants/structured_content.test.ts` (+2): wave-1 envelopes
+  `{path_dirs, total}` and `{bytes_written, lines_written, created}`.
+
 ## [0.6.0] — 2026-05-18
 
 Configurable filesystem scope + chunked I/O + occurrence-count assertions

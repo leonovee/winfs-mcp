@@ -5,14 +5,16 @@ Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
 UTF-8-no-BOM invariant.
 
-**Status:** v0.6 — **30 tools** (5 core from v0.1 + 5 mutations / batch /
-introspection from v0.2 + 4 search / self-recovery from v0.3 + 4
-editor / slicing / diff / tail from v0.4 + 11 git / exec / system /
-network from v0.5 + 1 byte-offset chunked write from v0.6) and the
+**Status:** v0.7 wave 1 (unreleased) — **33 tools** (5 core from v0.1 + 5
+mutations / batch / introspection from v0.2 + 4 search / self-recovery from
+v0.3 + 4 editor / slicing / diff / tail from v0.4 + 11 git / exec / system /
+network from v0.5 + 1 byte-offset chunked write from v0.6 + 3 consumer-agent
+adds from v0.7 wave 1: `ssh_exec`, `list_path_dirs`, `write_json`) and the
 full core/ invariant layer. v0.6 also adds the opt-in
 `unrestrictedFilesystem` mode (see config reference below) and the
 `edit_file.edits[].expected_count` extension (see spec amendment §W).
-v0.7+ is roadmap-only (no tool additions planned in §7).
+The main v0.7 DC-parity wave (features A–D in the roadmap) is still
+roadmap-only.
 
 ## Install
 
@@ -187,6 +189,14 @@ Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 |---------------|-----------|-----------------------------------------------------------------------------|
 | `write_chunk` | no        | **⚠️ NOT atomic.** Opens with `r+`, writes payload at `offset`, closes — no temp file, no fsync, no rename. Response carries literal `atomic: false`. Designed for surgical edits on huge files. `offset > file_size_before` → `EOFFSET` (no sparse-file creation). UTF-8 boundary check at offset + offset+content_length (toggle via `validate_byte_range: false`). Mid-multibyte → `EENCODING`. Use `write` for atomic whole-file replacement. |
 
+### Consumer-agent feedback adds (v0.7 wave 1)
+
+| Tool             | Read-only | What it does                                                                |
+|------------------|-----------|-----------------------------------------------------------------------------|
+| `ssh_exec`       | no        | First-class SSH. Spawns `ssh.exe` directly via `child_process.spawn` — no shell, no PowerShell wrapper. `host` must be a Host alias resolvable via `ssh -G` against `~/.ssh/config`; raw `user@host` rejected. Sidesteps three stacked failures that block ssh through `execute_command` (PATH sanitization, PS document-in-pipeline, silent-stdout bug #2). 4 KB per-stream output cap; `timeout_seconds` default 30 / max 300. Errors: `ESSHNOTFOUND`, `EHOST_UNKNOWN`, `ETIMEDOUT`, `EIO`. See spec amendment §X. |
+| `list_path_dirs` | yes       | Returns the sanitized PATH array that `execute_command` / `find_command` / `run_python` / `run_pytest` / `ssh_exec` inherit. Use it to debug "why is binary X invisible" — if a directory isn't in this list, subprocesses can't see binaries in it. No input args. |
+| `write_json`     | no        | Atomic JSON write, symmetric to v0.3 `read_json`. `path` must end in `.json` (case-insensitive, validated on both supplied path and realpath). `value: unknown` is `JSON.stringify`-d (with `indent` 0..10, default 2); trailing newline appended; atomic temp + fsync + rename. `overwrite: false` by default (safer than v0.1 `write`). New error: `EEXT_NOT_JSON`. |
+
 Every tool returns pure-payload `structuredContent` that matches its
 declared `outputSchema` 1:1 (no `ok` / `tool` envelope — see [v0.1.1
 hotfix](docs/v0.2-backlog.md#1--structuredcontent-validation-mismatch-on-every-tool-response--resolved-in-v011)).
@@ -300,5 +310,6 @@ surface is COMPLETE at v0.6 (30 tools); v0.7+ adds no new tools.
 - ✅ **v0.4** — `read_section`, `diff_files`, `edit_file` (with `dry_run`), `read_since`
 - ✅ **v0.5.1** — `git_status`, `git_log`, `git_show`, `git_diff`, `git_blame`, `execute_command`, `run_python`, `run_pytest`, `find_command`, `check_env`, `fetch_url` (the v0.5.0 tag is a phantom; see acceptance doc for reconciliation)
 - ✅ **v0.6** — `write_chunk` + `edit_file.expected_count` extension + `unrestrictedFilesystem` mode
-- **v0.7+** — roadmap: external-review patch waves (v0.5.x reviewers across grep / edit_file / execute_command / fetch_url), POST/PUT body for fetch_url, HTTP/2 / HTTP/3 support, streaming reads/writes for files > readMaxBytes. See [`prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md`](prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md) when authored.
+- 🟡 **v0.7 wave 1** (unreleased, on `main`) — `ssh_exec`, `list_path_dirs`, `write_json`. Consumer-agent feedback adds from the 2026-05-18 ecom session. Spec amendment §X.
+- **v0.7 main wave** — roadmap: DC-parity features (persistent shells via `start_process` + `interact_with_process`, async `grep` pagination, `list_processes` + `kill_process`, `edit_file` char-level diff on near-miss `EUNIQUE`). See [`prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md`](prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md).
 - **v1.0** — MCPB packaging + full eval suite (10 questions, ≥ 80 % pass) + production README rewrite. No new tools.
