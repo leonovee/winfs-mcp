@@ -194,6 +194,33 @@ Array-output tools (`glob`, `grep`, `audit_tail`, `read_multiple_files`,
 `git_log`, `git_blame`) use a `{<plural>, total, ...flags}` envelope —
 see spec amendment §F.
 
+## Known limitations
+
+### Audit-log content truncation
+
+The audit log is a forensic trail, not a content store. To keep secrets out of
+the log, every mutation entry truncates user-supplied content before write:
+`write` / `append` payloads are recorded as a 256-character prefix
+(`content_prefix`) plus a full byte count (`content_length`); `execute_command`
+/ `run_python` / `run_pytest` stdout and stderr are recorded as 4-KB prefixes
+per stream. Reading the audit log via `audit_tail` therefore tells you **what
+ran and roughly what came back**, not what was written or printed in full. Do
+not use the audit log as a verification channel for "did file X end up with the
+exact bytes I sent" — re-`read` the file instead.
+
+### Remote command execution gap (resolved in v0.7)
+
+`execute_command` cannot reliably invoke `ssh.exe` on this Windows host. Three
+problems stack: (1) the sanitized PATH does not include
+`C:\Windows\System32\OpenSSH`, so `find_command name="ssh"` returns
+`{found: false}`; (2) PowerShell rejects `& 'C:\Windows\System32\OpenSSH\ssh.exe' ...`
+in pipelines with `Cannot run a document in the middle of a pipeline`
+(file-association quirk); (3) even direct invocation produces empty stdout
+with exit 0 — known bug #2 in `CLAUDE.md`. The v0.7 `ssh_exec` tool replaces
+this path by spawning `ssh.exe` via `child_process.spawn` directly, with hosts
+whitelisted from `~/.ssh/config`. For v0.6.x users: invoke ssh from outside
+the MCP server.
+
 ## Hard invariants (always on)
 
 - **UTF-8 native I/O.** BOM stripped on read; never written.
