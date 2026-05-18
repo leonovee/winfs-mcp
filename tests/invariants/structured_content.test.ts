@@ -205,7 +205,7 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
     expect(Object.keys(sc).sort()).toEqual(["data", "size_bytes"]);
   });
 
-  it("grep: pure payload {matches, total, truncated} (no reason on clean run)", async () => {
+  it("grep: pure payload {matches, total, total_matches, truncated} (no reason on clean run)", async () => {
     const { grepImpl } = await import("../../src/tools/search/grep.js");
     await fs.writeFile(path.join(root, "a.txt"), "alpha\nbeta\n", "utf8");
     const res = await runTool(
@@ -230,7 +230,7 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
     );
     expect(res.isError).toBeUndefined();
     const sc = res.structuredContent as Record<string, unknown>;
-    expect(Object.keys(sc).sort()).toEqual(["matches", "total", "truncated"]);
+    expect(Object.keys(sc).sort()).toEqual(["matches", "total", "total_matches", "truncated"]);
   });
 
   it("audit_tail: pure payload {entries, total, entries_seen_total}", async () => {
