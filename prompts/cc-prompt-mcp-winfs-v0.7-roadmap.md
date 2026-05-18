@@ -174,6 +174,58 @@ output: {
 
 ---
 
+## Consumer-agent feedback adds (2026-05-18 ecom session)
+
+> Источник: ~1-часовая сессия в ecom-проекте Владимира 2026-05-18, где consumer Chat-Claude использовал winfs + Desktop Commander против Windows-машины и зафиксировал три точки трения. Полный отчёт — в appendix'е промпта `prompts/cc-prompt-v0.7-wave1-ssh-listpath-writejson.md`.
+>
+> Эти три добавления уезжают как **v0.7 wave 1** ДО основной DC-parity волны (фич A–D выше). Они независимы от A–D и закрывают remote-admin use case (через ssh), который сейчас effectively impossible через `execute_command`.
+
+**Net surface delta после wave 1:** 30 (v0.6) → 33. Главная DC-parity волна потом доводит до 36.
+
+### `winfs:ssh_exec` (first-class SSH)
+
+**Текущая боль:** `execute_command` не может надёжно вызвать `ssh.exe` из-за трёх накладывающихся проблем — sanitized PATH прячет `System32\OpenSSH`; PowerShell режектит ssh.exe в pipeline ("Cannot run a document in the middle of a pipeline"); known bug #2 проекта — silent stdout / empty exit 0 при `& "ssh.exe" -V` через execute_command. Все три обходятся одним решением: spawn'им ssh.exe напрямую через `child_process.spawn`, без shell.
+
+**Контракт:**
+
+- **Input:** `{ host: string, command: string, timeout_seconds?: number }` — default 30 s, max 300 s.
+- **Host validation:** `host` ДОЛЖЕН быть `Host` alias'ом, резолвящимся в `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`). Метод: вызывается `ssh -G <host>` с коротким timeout'ом; exit 0 и резолвенная `hostname` строка → alias валиден. Raw `user@host` строки НЕ принимаются. SSH config пользователя — это whitelist; nothing else.
+- **Spawn:** `child_process.spawn` напрямую по абсолютному пути к ssh.exe (resolved once at startup; default `C:\Windows\System32\OpenSSH\ssh.exe`, configurable через `config.sshExePath`). Без shell, без PowerShell wrapper'а. Аргументы: `[host, command]`.
+- **Output envelope:** `{ host, stdout, stderr, exit_code: number | null, timed_out: boolean, truncated_stdout?: boolean, truncated_stderr?: boolean, duration_ms: number }`. 4-KB truncation per stream, mirrors `execute_command` policy.
+- **Error codes:**
+  - `EHOST_UNKNOWN` — host не резолвится через `ssh -G`
+  - `ESSHNOTFOUND` — ssh.exe не существует по configured/default path
+  - `ETIMEDOUT` — превышен `timeout_seconds`
+  - `EIO` — child process не стартовал (mirror v0.6 §U exec_safety fix)
+- **Audit:** mutation-class entry. host, command prefix (256 chars), exit_code, timed_out, spawnFailed. Carries `mode` per invariant #30.
+- **Mode behaviour:** разрешён в обоих режимах (strict + unrestricted) — ssh_exec это deliberate egress gated by ssh config, не allowedRoots.
+- **Documented prerequisite (not enforced):** работающий ssh-agent или passphrase-less ключ. Non-interactive subprocesses на Windows не наследуют Pageant/agent state.
+
+### `winfs:list_path_dirs` (sanitized PATH introspection)
+
+**Текущая боль:** агенты не знают, какие директории видит subprocess-окружение (sanitized PATH из `find_command` / `execute_command` / `run_python`). Дебажить "почему binary X не виден" приходится trial-and-error'ом.
+
+**Контракт:**
+
+- **Input:** none.
+- **Output:** `{ path_dirs: string[] }` — sanitized PATH в порядке resolution.
+- **Read-only:** audit entry omits `mode` field (per invariant #30 read-only convention).
+- **No tool-specific error codes** beyond the standard envelope (`ETIMEDOUT` if wrapper deadline hits, etc.).
+
+### `winfs:write_json` (atomic JSON write, symmetric to `read_json`)
+
+**Текущая боль:** `read_json` есть, `write_json` нет. Round-trip workflow (read → mutate → write) приходится собирать вручную через `JSON.stringify` + `write`, без `.json` extension check.
+
+**Контракт:**
+
+- **Input:** `{ path: string, value: unknown, indent?: number, overwrite?: boolean }` — default `indent: 2`, `overwrite: false`.
+- **Behaviour:** валидируется `.json` extension (case-insensitive) на canonicalized path, serialize через `JSON.stringify(value, null, indent)`, append trailing newline, atomic write через тот же temp+fsync+rename primitive как у `winfs:write`.
+- **Output envelope:** идентичен `winfs:write`: `{ bytes_written, lines_written, created }`.
+- **Error codes:** все ошибки `write` (`EPERM_ROOT`, `EEXIST`, `ENOENT`, `EIO`, `ETIMEDOUT`), плюс новый `EEXT_NOT_JSON` когда path не оканчивается на `.json`.
+- **Mode behaviour:** mutation, carries `mode`.
+
+---
+
 ## Hard invariants — preview сводный список v0.7
 
 - **#35–#39** для Feature B (start_process / interact)
@@ -187,14 +239,20 @@ Plus carry-forward всех v0.5 + v0.6 invariants (#1–#34).
 
 ## Spec amendments planned
 
-- **§X** — `start_process` + `interact_with_process` contract
-- **§Y** — `list_processes` + `kill_process` contract + magic-string `processManagement` config
-- **§Z** — `grep` pagination extension (back-compat)
-- **§AA** — `edit_file` EUNIQUE response shape extension (closest_match field)
+- **§X** — v0.7 wave 1: `ssh_exec` + `list_path_dirs` + `write_json` (consumer-agent feedback)
+- **§Y** — `start_process` + `interact_with_process` contract
+- **§Z** — `list_processes` + `kill_process` contract + magic-string `processManagement` config
+- **§AA** — `grep` pagination extension (back-compat)
+- **§AB** — `edit_file` EUNIQUE response shape extension (closest_match field)
 
 ---
 
-## Phased delivery (5 phases, estimated 16–22 hours CC)
+## Phased delivery (5 phases + wave 1, estimated 18–26 hours CC)
+
+**Phase 7-wave1 — Consumer-agent feedback adds (`ssh_exec` + `list_path_dirs` + `write_json`):** 2–4 hours
+- Ships ahead of features A–D; independent of them.
+- См. отдельный prompt `prompts/cc-prompt-v0.7-wave1-ssh-listpath-writejson.md`.
+- Commits: `feat(system): list_path_dirs`, `feat(file): write_json`, `feat(system): ssh_exec`, plus spec §X + docs.
 
 **Phase 7a — Feature A (edit_file diff):** 1–2 hours
 - src/tools/editor/edit_file.ts (add closest_match calculation)
