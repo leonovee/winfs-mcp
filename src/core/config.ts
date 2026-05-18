@@ -34,6 +34,11 @@ const CONFIG_SCHEMA = z
     // Must equal exactly `"I-UNDERSTAND-THE-RISK"`. Mismatch → startup fails
     // with a structured config error. Prevents accidental enable.
     unrestrictedFilesystemConfirm: z.string().optional(),
+    // v0.7 wave 1: ssh_exec binary path. Default OpenSSH location on
+    // Windows 10/11 (System32\OpenSSH\ssh.exe). Resolved once at startup;
+    // if the path doesn't exist, the tool still registers but every call
+    // returns ESSHNOTFOUND.
+    sshExePath: z.string().default("C:\\Windows\\System32\\OpenSSH\\ssh.exe"),
     auditLogPath: z.string().optional(),
     auditLogMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),
   })

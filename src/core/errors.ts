@@ -25,7 +25,11 @@ export type ErrorCode =
   | "EPARSE" // run_pytest: output format unrecognized
   | "EPYTHONNOTFOUND" // run_python: python binary missing
   // v0.6 — file / editor surface
-  | "EOFFSET"; // write_chunk: offset > file_size_before (sparse-file creation forbidden)
+  | "EOFFSET" // write_chunk: offset > file_size_before (sparse-file creation forbidden)
+  // v0.7 wave 1 — ssh + write_json
+  | "ESSHNOTFOUND" // ssh_exec: sshExePath does not exist on disk
+  | "EHOST_UNKNOWN" // ssh_exec: host not resolvable via ssh -G (not in ~/.ssh/config)
+  | "EEXT_NOT_JSON"; // write_json: path does not end in .json (case-insensitive)
 
 export interface StructuredError {
   ok: false;

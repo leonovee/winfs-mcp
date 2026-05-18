@@ -30,6 +30,9 @@ import { registerFindCommandTool } from "./tools/system/find_command.js";
 import { registerCheckEnvTool } from "./tools/system/check_env.js";
 import { registerFetchUrlTool } from "./tools/network/fetch_url.js";
 import { registerWriteChunkTool } from "./tools/file/write_chunk.js";
+import { registerListPathDirsTool } from "./tools/system/list_path_dirs.js";
+import { registerWriteJsonTool } from "./tools/file/write_json.js";
+import { registerSshExecTool } from "./tools/system/ssh_exec.js";
 
 export function createServer(config: ResolvedConfig): McpServer {
   const server = new McpServer({
@@ -82,6 +85,11 @@ export function createServer(config: ResolvedConfig): McpServer {
 
   // v0.6 file — byte-offset surgical writes (NOT atomic)
   registerWriteChunkTool(server, config);
+
+  // v0.7 wave 1 — consumer-agent feedback adds
+  registerListPathDirsTool(server, config);
+  registerWriteJsonTool(server, config);
+  registerSshExecTool(server, config);
 
   return server;
 }

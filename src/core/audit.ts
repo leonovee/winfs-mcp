@@ -37,6 +37,9 @@ export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
   "execute_command",
   "run_python",
   "run_pytest",
+  // v0.7 wave 1
+  "write_json",
+  "ssh_exec",
 ]);
 
 const SENSITIVE_ARG_KEYS = new Set([
@@ -48,6 +51,8 @@ const SENSITIVE_ARG_KEYS = new Set([
   "command", // execute_command: raw PowerShell expression (may contain secrets)
   "script", // run_python: -c script body
   "url", // fetch_url: query string may carry tokens; tool's auditExtras gives a smarter view
+  // v0.7 wave 1
+  "value", // write_json: arbitrary JSON-serialisable payload (may carry secrets)
 ]);
 
 /**
@@ -75,6 +80,14 @@ export function sanitizeArgs(args: unknown): Record<string, unknown> {
         out[k] = `<redacted: ${v.length} items>`;
         continue;
       }
+      // v0.7: extend to plain objects so `write_json`'s `value` (free-form
+      // JSON) gets a key-count summary instead of leaking content into audit.
+      if (v !== null && typeof v === "object") {
+        out[k] = `<redacted: ${Object.keys(v as Record<string, unknown>).length} keys>`;
+        continue;
+      }
+      // Primitives (number / boolean / null) at sensitive keys pass through —
+      // they're tiny and unlikely to carry meaningful secrets on their own.
     }
     if (typeof v === "string" && v.length > 256) {
       out[k] = `${v.slice(0, 256)}…<truncated ${v.length - 256} chars>`;

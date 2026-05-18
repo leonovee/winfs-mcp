@@ -395,6 +395,47 @@ describe("invariant: structuredContent matches outputSchema (v0.1.1 #1)", () => 
   // smoke test (git_status against a tmp non-repo) to confirm the wrapper
   // surfaces v0.5 tool errors in the expected shape.
 
+  // ── v0.7 wave 1 ───────────────────────────────────────────────────────
+
+  it("list_path_dirs: pure payload {path_dirs, total}", async () => {
+    const { listPathDirsImpl } = await import("../../src/tools/system/list_path_dirs.js");
+    const res = await runTool(
+      { tool: "list_path_dirs", config },
+      {},
+      (a) => listPathDirsImpl(a as Record<string, never>, config),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["path_dirs", "total"]);
+  });
+
+  it("write_json: pure payload {bytes_written, lines_written, created}", async () => {
+    const { writeJsonImpl } = await import("../../src/tools/file/write_json.js");
+    const p = path.join(root, "out.json");
+    const res = await runTool(
+      { tool: "write_json", config },
+      { path: p, value: { ok: 1 }, indent: 2, overwrite: false, mkdirParents: false },
+      (a) =>
+        writeJsonImpl(
+          a as {
+            path: string;
+            value: unknown;
+            indent: number;
+            overwrite: boolean;
+            mkdirParents: boolean;
+          },
+          config,
+        ),
+    );
+    expect(res.isError).toBeUndefined();
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(["bytes_written", "created", "lines_written"]);
+  });
+
+  // ssh_exec envelope is exercised by tests/unit/system/ssh_exec.test.ts
+  // (full mocked-spawn coverage). Adding it here would duplicate the mocking
+  // boilerplate without adding contract coverage.
+
   it("git_status error envelope: ENOTREPO surfaces in content[0].text, no structuredContent", async () => {
     const { gitStatusImpl } = await import("../../src/tools/git/git_status.js");
     const res = await runTool(

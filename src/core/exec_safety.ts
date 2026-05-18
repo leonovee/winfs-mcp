@@ -103,11 +103,14 @@ export function checkExecBlocklist(
 }
 
 /**
- * Returns the sanitized PATH that subprocess inherits (spec invariant Step 1
- * #10). Includes Windows system, Git CLI, Node, and optionally Python via
- * `config.pythonHome`. User's $PATH is NOT inherited.
+ * Returns the sanitized PATH directories that subprocess inherits, as an array
+ * in resolution order. Single source of truth — `sanitizedPath` joins this with
+ * `;` and `list_path_dirs` surfaces it directly. User's $PATH is NOT inherited.
+ *
+ * Spec invariant Step 1 #10. Includes Windows system, Git CLI, Node, and
+ * optionally Python via `config.pythonHome`.
  */
-export function sanitizedPath(config: ResolvedConfig): string {
+export function sanitizedPathDirs(config: ResolvedConfig): string[] {
   const parts: string[] = [
     "C:\\Windows\\System32",
     "C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
@@ -118,7 +121,13 @@ export function sanitizedPath(config: ResolvedConfig): string {
     "C:\\Program Files\\nodejs",
   ];
   if (config.pythonHome) parts.push(config.pythonHome);
-  return parts.join(";");
+  return parts;
+}
+
+/** PATH string (`;`-joined sanitizedPathDirs). Subprocess-env builder uses
+ *  this; `list_path_dirs` uses the array form. */
+export function sanitizedPath(config: ResolvedConfig): string {
+  return sanitizedPathDirs(config).join(";");
 }
 
 /** Build the env object subprocesses inherit. With execSanitizeEnv: true,

@@ -67,6 +67,7 @@ export async function makeTempConfig(): Promise<{ config: ResolvedConfig; root: 
     pythonHome: detectPythonHome(),
     unrestrictedFilesystem: false,
     unrestrictedFilesystemConfirm: undefined,
+    sshExePath: "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
     auditLogMaxBytes: 1024 * 1024,
     configPath: "<test>",
     resolvedAllowedRoots: [path.normalize(real)],
