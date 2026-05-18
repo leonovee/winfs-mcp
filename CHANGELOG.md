@@ -3,6 +3,156 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.6.0] — 2026-05-18
+
+Configurable filesystem scope + chunked I/O + occurrence-count assertions
+on top of the v0.5 29-tool surface. Net +1 tool (`write_chunk`, 30 total)
++ 1 schema extension (`edit_file.edits[].expected_count`) + 1
+cross-cutting config option (`unrestrictedFilesystem`).
+
+### ⚠️ BREAKING CHANGES from v0.5
+
+Two wire-format changes on existing `edit_file` responses. v0.x semver
+explicitly allows breaking changes on minor bumps; no back-compat shim
+shipped. Both formalised in spec §W.
+
+- **`edit_file` EUNIQUE `details` field renamed: `occurrences` →
+  `occurrences_found`.** Plus a new sibling field `expected_count` (the
+  value the caller supplied or the default 1) is now part of the details
+  shape. v0.5 callers parsing the old `details.occurrences` will see
+  `undefined`. **Migration:** rename to `details.occurrences_found`; also
+  read `details.expected_count` if you want to surface the requested
+  count alongside the actual one.
+
+- **`edit_file.replacements_made` semantics changed.** v0.5 returned
+  `args.edits.length` (the count the caller already knew — zero
+  information). v0.6 returns the actual sum of replacements performed
+  across all edits: `expected_count: 0` edits contribute 0,
+  `expected_count: 1` contribute 1, `expected_count: N` (N ≥ 2)
+  contribute N. **Migration:** if you were using the field as
+  "how many edits did I send", switch to `args.edits.length`
+  directly; if you want "how many bytes/chunks were actually mutated",
+  the new semantics give you that.
+
+### Added — new tool (1)
+
+- **`write_chunk`** — byte-offset surgical write tool for huge files.
+  Companion to v0.1 `read` (which has range support). Opens with
+  `fs.open(path, "r+")`, writes payload at `offset`, closes — **no temp
+  file, no fsync, no atomic rename**. Response carries the literal
+  `atomic: false`. Designed for in-place edits on files too large to
+  reload whole. Spec §V / invariants #31–#33:
+  - #31: non-atomicity is explicit and pinned by an invariant test.
+  - #32: `offset > file_size_before` → `EOFFSET` (new error code).
+    Sparse-file creation forbidden. `offset === file_size_before` is
+    the append-at-EOF path.
+  - #33: UTF-8 boundary check (default on). Both the boundary at
+    `offset` AND the boundary at `offset + content_length` in the
+    existing file must NOT be UTF-8 continuation bytes. Mid-multibyte
+    → `EENCODING`. Set `validate_byte_range: false` to bypass.
+  - Audit redaction: full content NEVER persisted; first 256 chars +
+    length + offset + mode (per #30) in `auditExtras`.
+
+### Added — `edit_file.edits[].expected_count` (spec §W / invariant #34)
+
+New optional field on each edit. Default 1 preserves v0.5 contract.
+Three modes:
+
+- **`expected_count: 1` (default).** Single-replace, EXACTLY 1
+  occurrence required (v0.5 contract).
+- **`expected_count: 0`.** Assertion-only mode. Verify `old_str` is
+  ABSENT (count must equal 0); no replacement is performed. Useful for
+  "ensure this code is removed" assertions in mixed-mode batches.
+- **`expected_count: N` (N ≥ 2).** Replace ALL occurrences atomically
+  within the edit (impl uses `split(old).join(new)`). Count must equal
+  N exactly; mismatch → `EUNIQUE`.
+
+Sequential application unchanged: edit K is checked against the buffer
+AFTER edits 0..K-1. `dry_run: true` still reports `replacements_made`
+matching what would have been written.
+
+### Added — configurable filesystem scope (spec §U / invariants #28–#30)
+
+Opt-in mode where `checkAllowed` short-circuits and accepts paths
+outside `allowedRoots`. Designed for dev sandboxes / agent VMs.
+**NEVER for production / multi-tenant hosts.**
+
+- New config knobs:
+  - `unrestrictedFilesystem: boolean` (default `false`).
+  - `unrestrictedFilesystemConfirm: string` (optional). When
+    `unrestrictedFilesystem === true`, must equal exactly
+    `"I-UNDERSTAND-THE-RISK"`. Mismatch → `loadConfig` throws at
+    startup (invariant #28; accidental enable structurally impossible).
+- `ResolvedConfig` gains derived field
+  `serverMode: "strict" | "unrestricted"`.
+- When unrestricted: 3-line stderr banner at startup (invariant #29)
+  + ready-line includes `mode=unrestricted` + sentinel
+  `_server_start` audit record carries `server_mode` in
+  `args_summary` and `mode` at top level.
+- Audit log: every mutation tool's audit entry gains top-level
+  `mode: "strict" | "unrestricted"` (invariant #30). Read-only tools
+  omit the field. Forensic queries: `mode === "unrestricted"` extracts
+  every mutation that ran outside `allowedRoots`.
+- **Other defenses stay in force in unrestricted mode**: exec
+  blocklist (#7), `check_env` safe-prefix (#8), `fetch_url` SSRF
+  defense (#10), audit redaction (#11), atomic writes, bounded
+  timeouts. Unrestricted only short-circuits the allowed-roots check.
+
+### Added — infrastructure
+
+- New error code: **`EOFFSET`** (`write_chunk` sparse-file forbidden).
+- New audit-event convention: tool names beginning with `_` are
+  RESERVED for system events emitted by the audit subsystem itself.
+  Real registered tools never use this prefix. `_server_start` is the
+  first system event; future system events should follow the
+  convention. Documented in `src/core/audit.ts` near `AuditRecord`.
+- `MUTATION_TOOLS` set in `audit.ts` (10 names — drives the `mode`
+  field injection).
+
+### Added — tests (+32 net new, 293 total)
+
+- `tests/unit/config_unrestricted.test.ts` (5): magic-confirm
+  validation truth table.
+- `tests/invariants/unrestricted_mode.test.ts` (4): strict mode
+  rejects out-of-roots; unrestricted accepts; mutation entry has
+  `mode` / read-only omits; `_server_start` carries `server_mode`.
+- `tests/unit/file/write_chunk.test.ts` (12): happy in-place,
+  base64 encoding, extend beyond EOF, offset 0, offset > size →
+  EOFFSET, EPERM_ROOT, ENOENT, EISDIR, lone-surrogate replacement,
+  UTF-8 boundary misalign → EENCODING, `validate_byte_range: false`
+  bypass, audit extras.
+- `tests/invariants/write_chunk_nonatomic.test.ts` (3): `atomic:
+  false` literal, no `.tmp` artifact, original-inode mutation.
+- `tests/unit/editor/edit_file_expected_count.test.ts` (8): default 1
+  back-compat, exact-count match, exact-count mismatch → EUNIQUE,
+  `expected_count: 0` assertion succeeds, `expected_count: 0` with
+  occurrence → EUNIQUE, `expected_count: 5` multi-replace, mixed batch
+  summing `replacements_made`, dry-run with `expected_count: 0`.
+- Existing v0.4 `edit_file` EUNIQUE tests updated for the renamed
+  details field (`occurrences` → `occurrences_found`).
+
+### Tests
+
+- 293 passing total in 52 files (was 261 in 47 files at v0.5.1).
+  +32 net new tests; +5 new files. Build clean (zero TS diagnostics).
+
+### Spec
+
+- Amendments §U–§W appended to `docs/design/mcp-winfs-spec.md`. Spec
+  line count: 977 → 1097.
+
+## [0.5.1] — 2026-05-17
+
+Canonical v0.5 ship. Carries the 11 v0.5 tool implementations on top
+of v0.4 surface (29 tools total): git RO (5), exec (3), system (2),
+network (1). The `v0.5.0` tag on remote (`2dc2a89`) is a phantom — it
+predates the 11 tool implementations and carries only v0.1–v0.4
+surface; reviewers / downstream consumers should clone `--branch v0.5.1`
+(commit `71ad8a6`), not `v0.5.0`.
+
+See `docs/v0.5.1-acceptance.md` for the full reconciliation note +
+per-criterion evidence.
+
 ## [0.4.0] — 2026-05-16
 
 Editor + slicing + diff + incremental tail. Closes spec §7 v0.4 milestone:

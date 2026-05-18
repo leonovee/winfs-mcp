@@ -193,6 +193,15 @@ export async function spawnSubprocess(
     let timedOut = false;
     let settled = false;
     let killedByCap = false;
+    // v0.5.x bug surfaced by v0.6 smoke: when `spawn()` succeeds synchronously
+    // but the OS fails to start the process (typical case: executable not on
+    // sanitized PATH), Node emits an asynchronous "error" event. Without
+    // capturing that error here, onSettle resolved with `spawnFailed: false`
+    // + `exitCode: null` + empty stdout/stderr — which the caller couldn't
+    // distinguish from a clean-exit + no-output process. We now capture the
+    // async error and pass it to onSettle so the spawnFailed path is surfaced
+    // consistently with the synchronous-throw path above.
+    let asyncSpawnError: NodeJS.ErrnoException | null = null;
 
     const env = buildExecEnv(opts.config);
 
@@ -322,7 +331,7 @@ export async function spawnSubprocess(
       settled = true;
       clearTimeout(deadlineTimer);
       if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
-      resolve({
+      const base = {
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
         exitCode,
@@ -330,11 +339,23 @@ export async function spawnSubprocess(
         truncatedStdout,
         truncatedStderr,
         durationMs: Date.now() - started,
-        spawnFailed: false,
-      });
+      };
+      if (asyncSpawnError) {
+        resolve({
+          ...base,
+          spawnFailed: true,
+          spawnErrorCode: asyncSpawnError.code,
+          spawnErrorMessage: asyncSpawnError.message ?? String(asyncSpawnError),
+        });
+      } else {
+        resolve({ ...base, spawnFailed: false });
+      }
     };
 
-    child.on("error", () => onSettle(null));
+    child.on("error", (err) => {
+      asyncSpawnError = err as NodeJS.ErrnoException;
+      onSettle(null);
+    });
     child.on("close", (code) => onSettle(code));
   });
 }

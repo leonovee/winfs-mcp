@@ -35,6 +35,14 @@ export interface AllowCheckOptions {
  * ancestor + appending the missing tail. This lets `write` target a new file
  * inside an allowed root without false-positive ENOENT, while still
  * defeating `..`-escape and junction shenanigans on the ancestor.
+ *
+ * v0.6 §U: when `config.serverMode === "unrestricted"`, the allowed-roots
+ * prefix check is SKIPPED. The path is still canonicalised via realpath
+ * (handles symlinks, `..`, relative-to-absolute) and `allowMissing` semantics
+ * still apply, but no EPERM_ROOT is ever returned. All other security
+ * defenses (exec blocklist, SSRF, audit log, atomic writes) remain in force.
+ * The mode is set at server start from `config.unrestrictedFilesystem` +
+ * magic-string confirm.
  */
 export async function checkAllowed(
   inputPath: string,
@@ -51,6 +59,29 @@ export async function checkAllowed(
   }
 
   const absolute = path.resolve(inputPath);
+
+  // v0.6 §U short-circuit: unrestricted mode bypasses the allowedRoots prefix
+  // check. We still walk realpath (deepest-existing-ancestor pattern) so
+  // symlinks resolve consistently and `allowMissing` callers still get a
+  // canonical path. ENOENT semantics preserved when `!allowMissing`.
+  if (config.serverMode === "unrestricted") {
+    let realPath: string;
+    let targetExists = true;
+    try {
+      realPath = await fs.realpath(absolute);
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code !== "ENOENT") {
+        return buildError("EIO", `realpath failed: ${e?.message ?? String(err)}`);
+      }
+      targetExists = false;
+      realPath = absolute;
+    }
+    if (!targetExists && !opts.allowMissing) {
+      return buildError("ENOENT", `Path does not exist: ${absolute}`);
+    }
+    return { realPath: path.normalize(realPath) };
+  }
 
   // Always walk realpath on the deepest existing ancestor so allowed-roots
   // can be checked even when the target itself is missing. Doing the

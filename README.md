@@ -5,11 +5,14 @@ Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
 UTF-8-no-BOM invariant.
 
-**Status:** v0.4 — 18 tools (5 core from v0.1 + 5 mutations / batch /
+**Status:** v0.6 — **30 tools** (5 core from v0.1 + 5 mutations / batch /
 introspection from v0.2 + 4 search / self-recovery from v0.3 + 4
-editor / slicing / diff / tail from v0.4) and the full core/ invariant
-layer. v0.5+ adds the remaining 11 tools per
-`docs/design/mcp-winfs-spec.md` §7.
+editor / slicing / diff / tail from v0.4 + 11 git / exec / system /
+network from v0.5 + 1 byte-offset chunked write from v0.6) and the
+full core/ invariant layer. v0.6 also adds the opt-in
+`unrestrictedFilesystem` mode (see config reference below) and the
+`edit_file.edits[].expected_count` extension (see spec amendment §W).
+v0.7+ is roadmap-only (no tool additions planned in §7).
 
 ## Install
 
@@ -48,6 +51,43 @@ in PowerShell adds a BOM and breaks `JSON.parse`. Safe write:
 $json | Out-File -FilePath "$env:LOCALAPPDATA\mcp-winfs\config.json" -Encoding utf8NoBOM
 ```
 
+### ⚠️ Unrestricted filesystem mode (v0.6, opt-in)
+
+For development sandboxes and automated agent VMs where filesystem-wide
+access is the explicit goal, v0.6 adds an opt-in mode that bypasses the
+`allowedRoots` check entirely. **NEVER use this in production on a
+multi-tenant host. NEVER use it when the server is exposed to untrusted
+callers.** The magic-confirm mechanism prevents accidental enable; it
+does NOT make the mode safe for adversarial environments.
+
+To enable, add BOTH fields to your config (exact match on the confirm
+string is required — anything else throws at startup):
+
+```json
+{
+  "allowedRoots": ["..."],
+  "unrestrictedFilesystem": true,
+  "unrestrictedFilesystemConfirm": "I-UNDERSTAND-THE-RISK"
+}
+```
+
+When unrestricted, the server prints a 3-line stderr banner at startup
+and the ready line includes `mode=unrestricted`. Every mutation tool's
+audit-log entry carries a top-level `mode: "unrestricted"` field so
+post-hoc forensic queries can extract every write that ran outside
+`allowedRoots`. The first audit-log entry of the session is a
+`_server_start` sentinel record carrying `server_mode` in
+`args_summary` (the `_` prefix is reserved for audit-subsystem events;
+real tools never use it).
+
+**Other defenses stay in force in unrestricted mode**: exec blocklist,
+`check_env` safe-prefix, `fetch_url` SSRF defense, audit redaction,
+atomic writes, bounded timeouts. Unrestricted only short-circuits the
+`allowedRoots` check.
+
+See spec [§U](docs/design/mcp-winfs-spec.md) for the full threat-model
+discussion and invariants #28–#30.
+
 ## Setup in Claude Desktop
 
 Edit `%APPDATA%\Claude\claude_desktop_config.json` (or, on MSIX installs,
@@ -75,7 +115,7 @@ Use absolute paths for both `dist/index.js` and the config. **Do not use
 Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 `list`, `stat`) should appear in the tools list.
 
-## Tools (v0.4)
+## Tools (v0.6)
 
 ### Core FS (v0.1)
 
@@ -112,14 +152,47 @@ Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 |----------------|-----------|-----------------------------------------------------------------------------|
 | `read_section` | yes       | Slice a file by `line_range: [start, end]` (1-based) OR `byte_range: [start, end]` (0-based). UTF-8 byte ranges trim to valid boundaries (`adjusted: true`); `encoding: "raw"` returns base64. |
 | `diff_files`   | yes       | Unified textual diff between two sides. Each side is exactly one of: file path or inline string. `format: "minimal"` returns a summary + first 20 changed lines. UTF-8 BOM stripped; binary → EENCODING. |
-| `edit_file`    | no        | Atomic find-and-replace via `{old_str, new_str}` edits. Each `old_str` MUST appear exactly once (EUNIQUE on 0 or 2+). `dry_run: true` returns the diff without touching disk. Atomic write (temp + fsync + rename). |
+| `edit_file`    | no        | Find-and-replace via `{old_str, new_str, expected_count?}` edits, atomic write per edit. **v0.6:** `expected_count` (default 1) supports occurrence-count assertions — 0 = "must be absent" (assertion-only), N ≥ 2 = replace all N occurrences atomically. Mismatch → `EUNIQUE` with `details.{occurrences_found, expected_count}`. `dry_run: true` returns the diff without touching disk. Atomic write (temp + fsync + rename). |
 | `read_since`   | yes       | Incremental tail. Caller passes a byte offset from a prior call, gets the delta. Rotation detected when the file shrank (`file_rotated: true`, returns whole file). UTF-8 boundary advance ≤ 3 bytes silent. |
+
+### Git read-only (v0.5)
+
+| Tool         | Read-only | What it does                                                                |
+|--------------|-----------|-----------------------------------------------------------------------------|
+| `git_status` | yes       | Porcelain v2 parse → `{branch, ahead, behind, staged, modified, untracked, conflicted, detached}`. Mutation flags hard-denied by `git_safety`. |
+| `git_log`    | yes       | Up to `count` commits with optional `range` and `path_filter`. Range / pathspec args validated (no leading `-`, no NUL / control chars; pathspec passed after `--`). |
+| `git_show`   | yes       | Single revision → metadata + diff + files_changed. **`sha` requires hex (4–64 chars), NOT symbolic names like `HEAD`** — resolve via git_log first. |
+| `git_diff`   | yes       | Unified diff + `--numstat`-derived stats between two revs (or rev vs worktree). |
+| `git_blame`  | yes       | Per-line blame via `--line-porcelain`. Range capped at 10 000 lines. **`path` must be ABSOLUTE.** |
+
+### Subprocess execution (v0.5)
+
+| Tool              | Read-only | What it does                                                                |
+|-------------------|-----------|-----------------------------------------------------------------------------|
+| `execute_command` | no        | PowerShell dispatch. Pre-spawn blocklist (Remove-Item -Recurse, format, bcdedit, etc.) + sanitized PATH + bounded I/O capture (1 MB / stream default) + process tree kill on timeout. `cwd` must be inside allowedRoots. Hardcoded denylist is additive-only via `config.execExtraBlocklist`. |
+| `run_python`      | no        | `{mode: "inline", script}` runs `python -c <script>`. `{mode: "file", path}` runs `python <path>`. **No `args: ["-c", ...]` shape** — that's `execute_command` territory. Python binary resolved via `config.pythonHome` (else falls back to sanitized PATH). |
+| `run_pytest`      | no        | `python -m pytest` in `cwd`. Summary line parsed into structured counts; `count_only: true` invokes `--collect-only`. Unrecognized output → `EPARSE`. |
+
+### System + network (v0.5)
+
+| Tool           | Read-only | What it does                                                                |
+|----------------|-----------|-----------------------------------------------------------------------------|
+| `find_command` | yes       | PowerShell `Get-Command` lookup. `with_version: false` (default) returns only path. `with_version: true` invokes the binary with `--version` (opt-in — extra attack surface). |
+| `check_env`    | yes       | Safe-prefix only: `{present, length, prefix}` where `prefix.length ∈ {0, 4}`. Mathematically bounded — the full value NEVER returned regardless of length. |
+| `fetch_url`    | yes       | HTTP/HTTPS GET. Two-layer SSRF defense (host whitelist → DNS resolve → internal-IP deny; connect-by-IP + manual Host header against rebinding). 3-redirect chain re-validated at every hop. 5 MB / 15 s hard caps. `User-Agent` / `Accept` / `Accept-Language` only — `Authorization` etc. → `EINVAL`. |
+
+### Byte-offset file I/O (v0.6)
+
+| Tool          | Read-only | What it does                                                                |
+|---------------|-----------|-----------------------------------------------------------------------------|
+| `write_chunk` | no        | **⚠️ NOT atomic.** Opens with `r+`, writes payload at `offset`, closes — no temp file, no fsync, no rename. Response carries literal `atomic: false`. Designed for surgical edits on huge files. `offset > file_size_before` → `EOFFSET` (no sparse-file creation). UTF-8 boundary check at offset + offset+content_length (toggle via `validate_byte_range: false`). Mid-multibyte → `EENCODING`. Use `write` for atomic whole-file replacement. |
 
 Every tool returns pure-payload `structuredContent` that matches its
 declared `outputSchema` 1:1 (no `ok` / `tool` envelope — see [v0.1.1
 hotfix](docs/v0.2-backlog.md#1--structuredcontent-validation-mismatch-on-every-tool-response--resolved-in-v011)).
-Array-output tools (`glob`, `grep`, `audit_tail`, `read_multiple_files`)
-use a `{<plural>, total, ...flags}` envelope — see spec amendment §F.
+Array-output tools (`glob`, `grep`, `audit_tail`, `read_multiple_files`,
+`git_log`, `git_blame`) use a `{<plural>, total, ...flags}` envelope —
+see spec amendment §F.
 
 ## Hard invariants (always on)
 
@@ -170,12 +243,15 @@ npm test          # vitest run
 npm run test:watch
 ```
 
-v0.4 ships 179 tests in 33 files: per-tool happy path + every error code
-across 18 tools, plus invariants (UTF-8 roundtrip, junction/`..` escape,
+v0.6 ships 293 tests in 52 files: per-tool happy path + every error code
+across 30 tools, plus invariants (UTF-8 roundtrip, junction/`..` escape,
 timeout abort + grep partial-result + edit_file ETIMEDOUT, atomic-write
-integrity + edit_file dry-run-no-temp / rename-failure-no-leak, audit
-redaction, both-roots check for mutations, structuredContent shape across
-all 18 tools, audit_tail privileged-read boundary + TOCTOU close).
+integrity + edit_file dry-run-no-temp / rename-failure-no-leak +
+write_chunk non-atomic contract, audit redaction, both-roots check for
+mutations, structuredContent shape across all 30 tools, audit_tail
+privileged-read boundary + TOCTOU close, exec blocklist enforcement,
+check_env safe-prefix mathematical bound, fetch_url SSRF defense,
+unrestricted-mode short-circuit + audit `mode` field).
 
 ## Acceptance reports
 
@@ -183,16 +259,19 @@ all 18 tools, audit_tail privileged-read boundary + TOCTOU close).
 - v0.2: [`docs/v0.2-acceptance.md`](docs/v0.2-acceptance.md)
 - v0.3: [`docs/v0.3-acceptance.md`](docs/v0.3-acceptance.md)
 - v0.4: [`docs/v0.4-acceptance.md`](docs/v0.4-acceptance.md)
+- v0.5.1: [`docs/v0.5.1-acceptance.md`](docs/v0.5.1-acceptance.md) (the `v0.5.0` tag is a phantom — reviewers should clone `--branch v0.5.1`)
+- v0.6: [`docs/v0.6-acceptance.md`](docs/v0.6-acceptance.md)
 
 ## Roadmap
 
-`docs/design/mcp-winfs-spec.md` §7 has the full phasing:
+`docs/design/mcp-winfs-spec.md` §7 has the full phasing. The §4 tool
+surface is COMPLETE at v0.6 (30 tools); v0.7+ adds no new tools.
 
 - ✅ **v0.1** — `read`, `write`, `append`, `list`, `stat`
 - ✅ **v0.2** — `mkdir`, `move`, `copy`, `read_multiple_files`, `list_allowed_directories`
 - ✅ **v0.3** — `grep`, `glob`, `read_json`, `audit_tail`
 - ✅ **v0.4** — `read_section`, `diff_files`, `edit_file` (with `dry_run`), `read_since`
-- **v0.5** — git read-only (`log`, `status`, `diff`, `show`, `blame`)
-- **v0.6** — `execute_command`, `run_python`, `run_pytest`
-- **v0.7** — `find_command`, `check_env`, `fetch_url`
-- **v1.0** — MCPB packaging + full eval suite (10 questions, ≥ 80 % pass)
+- ✅ **v0.5.1** — `git_status`, `git_log`, `git_show`, `git_diff`, `git_blame`, `execute_command`, `run_python`, `run_pytest`, `find_command`, `check_env`, `fetch_url` (the v0.5.0 tag is a phantom; see acceptance doc for reconciliation)
+- ✅ **v0.6** — `write_chunk` + `edit_file.expected_count` extension + `unrestrictedFilesystem` mode
+- **v0.7+** — roadmap: external-review patch waves (v0.5.x reviewers across grep / edit_file / execute_command / fetch_url), POST/PUT body for fetch_url, HTTP/2 / HTTP/3 support, streaming reads/writes for files > readMaxBytes. See [`prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md`](prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md) when authored.
+- **v1.0** — MCPB packaging + full eval suite (10 questions, ≥ 80 % pass) + production README rewrite. No new tools.

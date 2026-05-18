@@ -29,6 +29,7 @@ import { registerRunPytestTool } from "./tools/exec/run_pytest.js";
 import { registerFindCommandTool } from "./tools/system/find_command.js";
 import { registerCheckEnvTool } from "./tools/system/check_env.js";
 import { registerFetchUrlTool } from "./tools/network/fetch_url.js";
+import { registerWriteChunkTool } from "./tools/file/write_chunk.js";
 
 export function createServer(config: ResolvedConfig): McpServer {
   const server = new McpServer({
@@ -78,6 +79,9 @@ export function createServer(config: ResolvedConfig): McpServer {
   registerFindCommandTool(server, config);
   registerCheckEnvTool(server, config);
   registerFetchUrlTool(server, config);
+
+  // v0.6 file — byte-offset surgical writes (NOT atomic)
+  registerWriteChunkTool(server, config);
 
   return server;
 }

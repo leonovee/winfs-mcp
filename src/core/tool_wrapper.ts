@@ -1,5 +1,5 @@
 import type { ResolvedConfig } from "./config.js";
-import { appendAudit, sanitizeArgs } from "./audit.js";
+import { appendAudit, sanitizeArgs, MUTATION_TOOLS } from "./audit.js";
 import { withTimeout, resolveTimeoutMs } from "./timeouts.js";
 import {
   buildError,
@@ -113,6 +113,12 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
     : undefined;
   const argsSummary = extraArgs ? { ...baseArgsSummary, ...extraArgs } : baseArgsSummary;
 
+  // v0.6 §U / invariant #30: mutation-tool audit entries carry the serverMode
+  // explicitly. Read-only tools omit the field for log brevity.
+  const modeField = MUTATION_TOOLS.has(ctx.tool)
+    ? { mode: ctx.config.serverMode }
+    : undefined;
+
   if (result.ok) {
     appendAudit(ctx.config, {
       ts: new Date().toISOString(),
@@ -120,6 +126,7 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
       args_summary: argsSummary,
       result_status: "ok",
       duration_ms: duration,
+      ...(modeField ?? {}),
     });
     return successResponse(result.value);
   }
@@ -130,6 +137,7 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
     result_status: "error",
     error_code: result.error.code as ErrorCode,
     duration_ms: duration,
+    ...(modeField ?? {}),
   });
   return errorResponse(result);
 }

@@ -31,6 +31,11 @@ const AuditEntry = z.object({
   result_status: z.union([z.literal("ok"), z.literal("error")]),
   error_code: z.string().optional(),
   duration_ms: z.number().nonnegative(),
+  // v0.6 §U invariant #30: mutation-tool entries carry the server mode
+  // (also present on _server_start sentinel records). Read-only entries
+  // omit this field. Optional in the schema so v0.5-era records (no
+  // `mode`) still parse cleanly during the backward scan.
+  mode: z.union([z.literal("strict"), z.literal("unrestricted")]).optional(),
 });
 
 const OutputShape = {
