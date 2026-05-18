@@ -197,6 +197,24 @@ Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 | `list_path_dirs` | yes       | Returns the sanitized PATH array that `execute_command` / `find_command` / `run_python` / `run_pytest` / `ssh_exec` inherit. Use it to debug "why is binary X invisible" — if a directory isn't in this list, subprocesses can't see binaries in it. No input args. |
 | `write_json`     | no        | Atomic JSON write, symmetric to v0.3 `read_json`. `path` must end in `.json` (case-insensitive, validated on both supplied path and realpath). `value: unknown` is `JSON.stringify`-d (with `indent` 0..10, default 2); trailing newline appended; atomic temp + fsync + rename. `overwrite: false` by default (safer than v0.1 `write`). New error: `EEXT_NOT_JSON`. |
 
+### Stateful process management (v0.7 wave 2b)
+
+The first long-lived shared mutable state in the server: an in-memory
+`ProcessRegistry` plus four tools that operate on it. Sessions are
+identified by uuidv4. Lifecycle: `running → exited | killed | timed_out
+| spawn_failed`, then held for `processSessionTtlMs` (default 60 s)
+before GC. Children are SIGKILL'd on SIGINT/SIGTERM via the
+`registry.shutdown()` drain hook in `src/index.ts` (10 s hard
+deadline). Sessions do NOT survive server restart — registry is
+process-local in-memory only. See spec amendment §Z.
+
+| Tool            | Read-only | What it does                                                              |
+|-----------------|-----------|---------------------------------------------------------------------------|
+| `start_process` | no        | `child_process.spawn(argv[0], argv.slice(1), { shell: false })` — returns immediately with `session_id`. Defenses parity with `execute_command`: composed argv blocklist, cwd in allowedRoots, sanitized exec env, per-session deadline (default 300 s / max 3600 s). Concurrency cap: 17th simultaneous running session → `EBUSY`. |
+| `interact`      | no        | Long-poll read of session stdout/stderr from caller-supplied `*_since` offsets, optional `input` to stdin first, optional `finalize` to close stdin. `max_wait_ms` default 5 000 / max 60 000. Errors: `ENOSESSION` (id not in registry), `EPIPE_CLOSED` (input after finalize/settle). `input` is in `SENSITIVE_ARG_KEYS` — never persisted to audit. |
+| `list_process`  | yes       | Enumerate sessions (both running and recently-settled within TTL). Returns `{ sessions, total }` sorted by `started_at` ASC. Useful for `kill_process` candidate discovery and for debugging stuck sessions. |
+| `kill_process`  | no        | Terminate a session. `force: false` (default) → Windows `taskkill /T` / POSIX SIGTERM with 5 s grace before SIGKILL escalation. `force: true` → immediate `taskkill /F /T` / SIGKILL. Idempotent: already-settled session returns `was_already_settled: true` with `exit_code` preserved. |
+
 Every tool returns pure-payload `structuredContent` that matches its
 declared `outputSchema` 1:1 (no `ok` / `tool` envelope — see [v0.1.1
 hotfix](docs/v0.2-backlog.md#1--structuredcontent-validation-mismatch-on-every-tool-response--resolved-in-v011)).
@@ -230,6 +248,23 @@ with exit 0 — known bug #2 in `CLAUDE.md`. The v0.7 `ssh_exec` tool replaces
 this path by spawning `ssh.exe` via `child_process.spawn` directly, with hosts
 whitelisted from `~/.ssh/config`. For v0.6.x users: invoke ssh from outside
 the MCP server.
+
+### Process registry is in-memory only (v0.7 wave 2b)
+
+The `ProcessRegistry` that backs `start_process` / `interact` /
+`list_process` / `kill_process` lives entirely in the server process's
+heap. Server restart **loses every session_id** — there is no
+durable store. SIGINT / SIGTERM trigger a 10-second drain that
+SIGKILLs every running child via `registry.shutdown()`, so workloads
+don't leak past server exit, but in-flight session ids become
+permanently invalid.
+
+A second consequence: a single mcp-winfs process is the unit of
+sharing. Spawning two server instances (e.g. one in Inspector + one
+in Claude Desktop) means each has its own registry — a session
+started in one is invisible to the other. This is by design (no
+locking on a shared on-disk store), but worth flagging if you script
+across multiple clients.
 
 ## Hard invariants (always on)
 

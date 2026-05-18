@@ -1273,3 +1273,121 @@ Agents predicting timeout shape should switch on tool: `execute_command` and `ru
 **§Y.5. `sshExePath` override discoverability.**
 
 Wave 1 wired `config.sshExePath` (default `C:\Windows\System32\OpenSSH\ssh.exe`) but did not surface a commented override example, since `configs/local.json` is gitignored. The README "Local working config" section now documents the override explicitly so operators on non-standard ssh installations (Git-bundled at `C:\Program Files\Git\usr\bin\ssh.exe`, MSYS2 at `C:\msys64\usr\bin\ssh.exe`, etc.) know where to put it. No code change — documentation polish only.
+
+### 2026-05-19 — v0.7 wave 2b: §Z process control suite
+
+**Motivation.** Largest single DC-parity addition. Filesystem and one-shot exec tools are stateless — the server held no long-lived state across calls. Wave 2b introduces the first long-lived shared mutable state via an in-memory `ProcessRegistry`, plus four tools that operate on it: `start_process`, `interact`, `list_process`, `kill_process`. Net surface delta: 33 (wave 2a) → 37. Three new error codes: `ENOSESSION`, `EPIPE_CLOSED`, plus reuse of the existing `EBUSY` for the concurrency cap.
+
+**§Z.1. ProcessRegistry — the shared state.**
+
+Module `src/core/process_registry.ts`. Two classes:
+
+- `ProcessSession`: one long-running child. Owns its capped stdout/stderr buffers, the status state machine (`running → exited | killed | timed_out | spawn_failed`), the `child` reference, the waiter queue, and helpers `appendStdout` / `appendStderr` / `settle` / `snapshot` / `summary` / `waitForOutput` / `waitForSettle` / `writeStdin` / `closeStdin`.
+- `ProcessRegistry`: the `Map<session_id, ProcessSession>`. Constructor takes a `ResolvedConfig` and starts a periodic GC sweep on the `processGcIntervalMs` cadence. Methods: `spawn(command, cwd, extraEnv, timeoutSeconds)`, `get(session_id)`, `list()`, `runningCount()`, `kill(session_id, force)`, `shutdown()`.
+
+The registry is a singleton per-process — instantiated in `createServer` and shared across the four tool registrations. Tests inject a fresh `ProcessRegistry(config)` per `beforeEach` so cross-test leakage is impossible. `createServer` now returns `{ server, registry }` (was: `McpServer` only) so `src/index.ts` can wire the shutdown hook.
+
+**§Z.2. Session lifecycle.**
+
+```
+created ──spawn()──▶ running ──┬── child close ──▶ exited (exit_code captured)
+                               ├── deadline      ──▶ timed_out
+                               ├── kill(force=*) ──▶ killed
+                               └── spawn error   ──▶ spawn_failed
+                                                       │
+                                                       ▼
+                                                  settled_at set
+                                                       │
+                                          (held for processSessionTtlMs)
+                                                       │
+                                                       ▼
+                                                  GC removes
+```
+
+The deadline path uses a `deadlineFired` flag on the session. When the per-session timer fires we mark the flag and call `platformKill(child, force=true)` — the natural `close` event then settles the session as `timed_out` rather than `exited`. This avoids a race where the child terminates cleanly milliseconds after the deadline fires, leaving a "settled" session with a still-alive process attached (which on Windows blocks tempdir cleanup in tests).
+
+**§Z.3. Concurrency, buffer caps, GC, shutdown.**
+
+Bounded by four config fields, all added to `CONFIG_SCHEMA`:
+
+- `processMaxConcurrent` (default 16): `start_process` returns `EBUSY` when `runningCount() >= max`.
+- `processBufferCap` (default 1 048 576): per-stream output cap. Overflow drops bytes and sets `truncated_stdout` / `truncated_stderr`. Independent from `execMaxOutputBytes` (which guards `execute_command`); a long-running session can be held for an hour while its capped buffer rolls over many times against the cap.
+- `processSessionTtlMs` (default 60 000): how long a settled session stays in the registry so late `interact` calls can fetch the final output.
+- `processGcIntervalMs` (default 10 000): GC sweep cadence. Only settled sessions are eligible — running sessions are never GC'd.
+
+`registry.shutdown()`: iterates running sessions, calls `platformKill(child, force=true)` on each, awaits `child.once('close')` per session with a 10 s hard deadline, clears the GC interval. Idempotent. Wired into `src/index.ts` SIGINT / SIGTERM handlers that call `registry.shutdown()` and then `process.exit(0)`. Previously the server had no shutdown hook at all.
+
+**§Z.4. `start_process` tool contract.**
+
+`src/tools/system/start_process.ts`. Returns immediately with a `session_id`.
+
+- Input: `command: string[]` (1..64), `cwd?: string`, `env?: Record<string, string>`, `timeout_seconds?: number` (default 300, max 3600).
+- Defenses (parity with `execute_command`):
+  - Composed argv is checked against `execExtraBlocklist` (same patterns) — match → `EBLOCKED`.
+  - `cwd` validated via `checkAllowed`; default `allowedRoots[0]` when omitted.
+  - `env` merged on top of `buildExecEnv(config)`; subprocess PATH stays `sanitizedPath`.
+- Output: `{ session_id, started_at, status, command_prefix }`. `status` is `running` on the happy path, `spawn_failed` if the OS rejected the binary synchronously or asynchronously.
+- Errors: `EBLOCKED`, `EPERM_ROOT`, `ENOTDIR`, `ENOENT` (cwd missing), `EBUSY` (concurrency cap).
+- Audit (mutation, carries `mode`): `command_prefix` (256), `command_length`, `cwd`, `env_key_count`, `timeout_seconds`, `session_id`, `status`. Raw command body NEVER persisted.
+
+**§Z.5. `interact` tool contract.**
+
+`src/tools/system/interact.ts`. The pump that drives a session forward.
+
+- Input: `{ session_id, input?, stdout_since?, stderr_since?, max_wait_ms?, finalize? }`. Defaults: offsets 0, `max_wait_ms` 5000 (max 60000), `finalize` false.
+- If `input` is provided AND session is running AND stdin is open → `child.stdin.write(input)`. If `finalize: true` → `child.stdin.end()` and the session's `stdin_closed` flag is set permanently.
+- Then `session.waitForOutput(stdout_since, stderr_since, max_wait_ms)` — long-polls until new output past the caller's offset, session settle, or `max_wait_ms` (whichever fires first; deadline is normal, never raises).
+- Output: `{ session_id, status, exit_code, stdout, stderr, stdout_offset, stderr_offset, truncated_stdout, truncated_stderr, settled_at }`. Slices are byte-indexed (`Buffer.subarray` + `toString("utf8")`); partial multi-byte sequences degrade to U+FFFD per Node's default decoding.
+- Errors:
+  - `ENOSESSION` — session_id not in registry (never existed or GC'd past TTL).
+  - `EPIPE_CLOSED` — input was supplied but stdin is already closed (prior `finalize` or session settled).
+- Outer `runTool` timeout is bumped to `max_wait_ms + 2 000 ms` so the wrapper never short-circuits to `ETIMEDOUT` before the long-poll deadline fires naturally.
+- Audit (mutation, carries `mode`): `session_id`, `input_bytes` (count or `'none'`), `max_wait_ms`, `finalize`, `returned_stdout_bytes`, `returned_stderr_bytes`, `session_status`. `input` body is added to `SENSITIVE_ARG_KEYS` and redacted as `<redacted: N bytes>`.
+
+**§Z.6. `list_process` tool contract.**
+
+`src/tools/system/list_process.ts`. Read-only enumeration.
+
+- Input: none.
+- Output: `{ sessions: SessionSummary[], total: number }`. Each summary: `session_id`, `command_prefix` (256), `started_at`, `status`, `exit_code`, `stdout_bytes`, `stderr_bytes`, `truncated_stdout`, `truncated_stderr`, `settled_at`. Sorted by `started_at` ascending.
+- Errors: none (other than the wrapper's `ETIMEDOUT`).
+- Audit: read-only — `mode` field omitted.
+
+**§Z.7. `kill_process` tool contract.**
+
+`src/tools/system/kill_process.ts`. Idempotent.
+
+- Input: `{ session_id, force? }` (force default false).
+- Already-settled session → no-op return `{ killed: false, was_already_settled: true, status, exit_code }`.
+- Running session → `registry.kill(session_id, force)` which:
+  - Windows graceful: `taskkill /T /PID <pid>` (no `/F`). 5 s grace. If still running → escalate to `taskkill /F /T`.
+  - Windows forced: `taskkill /F /T /PID <pid>`.
+  - POSIX graceful: SIGTERM. 5 s grace. If still running → SIGKILL.
+  - POSIX forced: SIGKILL.
+  - After kill request, await `child.once('close')` with a 2 s fallback. If still running after the combined wait, defensively settle as `killed` with `exit_code: null`. Race-handling: if `close` already fired with status `exited` just before the kill landed, reclassify as `killed`.
+- Output: `{ session_id, killed, was_already_settled, status, exit_code }`.
+- Errors: `ENOSESSION`.
+- Audit (mutation, carries `mode`): `session_id`, `force`, `killed`, `was_already_settled`, `session_status`.
+- Outer `runTool` timeout bumped to ≥ 10 s so the graceful-kill 5+2 grace doesn't synth `ETIMEDOUT`.
+
+**§Z.8. Error code catalog additions.**
+
+| Code | Tool | Meaning |
+|---|---|---|
+| `ENOSESSION` | `interact`, `kill_process` | `session_id` not in the in-memory registry (never existed, or GC'd past `processSessionTtlMs` after settle). |
+| `EPIPE_CLOSED` | `interact` | Input supplied but child stdin is closed (prior `finalize: true`, or the session has already settled). Returned BEFORE the long-poll read so the caller learns the write failed even with a 5-second poll. |
+| `EBUSY` | `start_process` | Concurrency cap (`processMaxConcurrent`) reached. Existing code; new context. |
+
+**§Z.9. `MUTATION_TOOLS` extension.**
+
+`MUTATION_TOOLS` (audit.ts) grows from 12 to 15: `+ start_process + interact + kill_process`. `list_process` is read-only and is NOT added.
+
+**§Z.10. `SENSITIVE_ARG_KEYS` extension.**
+
+`+ input` (interact). Redacted by the existing string-bytes / array-items / object-keys rule already in place; reuses the sanitizer that wave 1 extended for `write_json.value`.
+
+**Invariant #36 — process registry is the ONLY long-lived shared mutable state.** No other tool may take a dependency on shared in-memory state across calls. Future stateful tools either add to this registry (process management) or build their own clearly-bounded singleton, instantiated in `createServer` and drained via `shutdown()`.
+
+**Invariant #37 — shutdown drains the registry within 10 s.** SIGINT/SIGTERM handlers in `src/index.ts` call `registry.shutdown()` which SIGKILLs all running children and awaits their `close` event with a 10 s hard deadline. Children never leak past server process exit on the happy path.
+
+**Invariant #38 — every settled session is reapable.** A session whose status flips out of `running` MUST have its child either fully closed or about to close. The `deadlineFired` flag ensures the timed_out path lets the natural close event drive settlement, rather than settling first and leaving a still-alive process attached.

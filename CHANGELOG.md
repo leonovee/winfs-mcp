@@ -3,6 +3,114 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased] — v0.7 wave 2b (process control suite)
+
+Largest single DC-parity addition. Introduces the first long-lived
+shared mutable state in the server (an in-memory `ProcessRegistry`)
+plus four tools that operate on it. Net surface delta: 33 (wave 2a)
+→ 37. No version bump — `[Unreleased]` continues.
+
+### Added — new tools (4)
+
+- **`start_process`** — `child_process.spawn(argv[0], argv.slice(1),
+  { shell: false })` against a register-then-return session model.
+  Input: `command: string[]`, `cwd?`, `env?`, `timeout_seconds?`
+  (default 300, max 3600). Defenses parity with `execute_command`:
+  composed-argv blocklist, `cwd` validated against `allowedRoots`
+  (defaults to `allowedRoots[0]`), `env` extends sanitized exec env
+  (subprocess PATH = `sanitizedPath`). Concurrency cap (17th
+  simultaneous running session → `EBUSY`). Response is intentionally
+  tiny: `{ session_id, started_at, status, command_prefix }`. Spec
+  §Z.4.
+- **`interact`** — long-poll read of session stdout/stderr starting at
+  caller-supplied `*_since` offsets, optional `input` to stdin
+  beforehand, optional `finalize` to close stdin permanently. The
+  pump that drives long-running children forward — typical caller
+  loop reads each response's `stdout_offset` / `stderr_offset` back
+  into the next call's `*_since`. `max_wait_ms` default 5000 / max
+  60000; deadline is normal (resolves with whatever's buffered,
+  never raises). Spec §Z.5.
+- **`list_process`** — read-only enumeration of every session in the
+  registry, both running and recently-settled (within
+  `processSessionTtlMs` after settle). Returns `{ sessions, total }`
+  sorted by `started_at` ASC. Spec §Z.6.
+- **`kill_process`** — terminate a session. `force: false` (default)
+  = Windows `taskkill /T` / POSIX SIGTERM with 5 s grace before
+  SIGKILL escalation. `force: true` = immediate `taskkill /F /T` /
+  SIGKILL. Idempotent — settled session returns
+  `was_already_settled: true` with `exit_code` preserved. Spec §Z.7.
+
+### Added — infrastructure
+
+- New module `src/core/process_registry.ts` — `ProcessSession` and
+  `ProcessRegistry`. First long-lived shared mutable state in the
+  server. Per-session capped output buffers, status state machine,
+  waiter queue with `waitForOutput` / `waitForSettle`, periodic GC
+  sweep, platform-aware kill helpers, drain via `shutdown()`. Spec
+  §Z.1–§Z.3.
+- `createServer` signature changed: returns `{ server, registry }`
+  (was: `McpServer` only). Only consumers: `src/index.ts` (wires
+  shutdown) and the in-tree `createServer` call. No test impact.
+- `src/index.ts` gains SIGINT / SIGTERM handlers that call
+  `registry.shutdown()` (10 s hard deadline) before
+  `process.exit(0)`. Idempotent — second signal during shutdown is
+  ignored. Previously the server had no shutdown hook at all.
+- New config fields: `processMaxConcurrent` (default 16),
+  `processBufferCap` (default 1 MB), `processSessionTtlMs` (default
+  60 s), `processGcIntervalMs` (default 10 s).
+- `MUTATION_TOOLS` extended: `+ start_process + interact +
+  kill_process` (12 → 15). `list_process` is read-only and NOT added.
+- `SENSITIVE_ARG_KEYS` extended: `+ input` (interact stdin bytes —
+  may carry passwords / interactive secrets, never persisted to
+  audit).
+- New error codes: `ENOSESSION`, `EPIPE_CLOSED` (catalog spec §Z.8).
+  `EBUSY` (existing) gains a new contextual meaning for the
+  concurrency cap.
+
+### Tests
+
+- `tests/unit/process/process_registry.test.ts` (10): empty list,
+  spawn returns running session, settled has exit_code +
+  settled_at, GC removes past TTL, buffer cap truncates,
+  waitForOutput resolves on chunk and on deadline, timed_out
+  transition, spawn_failed for bogus binary, force-kill transitions
+  to killed.
+- `tests/unit/process/list_process.test.ts` (3): empty registry,
+  two-spawn ordering by started_at, settled session summary carries
+  exit_code + settled_at.
+- `tests/unit/process/start_process.test.ts` (7): happy echo,
+  EPERM_ROOT on outside cwd, EBLOCKED via composed argv, EBUSY at
+  cap, spawn_failed for bogus binary, timed_out on 1-second
+  deadline, cwd subdirectory works.
+- `tests/unit/process/interact.test.ts` (6): happy echo + exited,
+  ENOSESSION on unknown id, long-poll deadline empty stdout within
+  budget, EPIPE_CLOSED after finalize, EPIPE_CLOSED on settled
+  session, paginated reads via stdout_since.
+- `tests/unit/process/kill_process.test.ts` (5): force-kill,
+  already-settled idempotent, ENOSESSION on unknown id, second kill
+  idempotent, graceful kill transitions to killed.
+
+Net: 340 → 371 passing (+31 tests, no regressions).
+
+### Architectural notes
+
+ProcessRegistry is the first long-lived shared mutable state in the
+server (invariant #36). Filesystem and one-shot exec tools remained
+stateless through v0.6 + wave 1 + wave 2a; persisting children
+across calls required a singleton lifecycle that didn't exist.
+`createServer` now constructs the registry and `src/index.ts` drains
+it on SIGINT/SIGTERM — neither of which were patterns the server
+had before. Test isolation is via per-`beforeEach`
+`new ProcessRegistry(config)` rather than module-level state, so
+parallel test files don't leak children at each other.
+
+The deadline-vs-close race was the only architectural surprise: a
+naive timeout handler that calls `settle("timed_out", null)` first
+and SIGKILLs the child second leaves a still-alive process attached
+to a "settled" session, which blocked tempdir cleanup on Windows.
+The fix (`deadlineFired` flag — settle decision is deferred to the
+natural `close` event, which checks the flag) is invariant #38.
+
 ## [Unreleased] — v0.7 wave 2a (existing-tool improvements)
 
 Compact follow-up to wave 1: four improvements to tools already in the
