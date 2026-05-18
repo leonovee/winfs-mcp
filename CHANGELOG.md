@@ -3,6 +3,80 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased] — v0.7 wave 2a (existing-tool improvements)
+
+Compact follow-up to wave 1: four improvements to tools already in the
+surface, plus two documentation hangovers. No new tools. No version
+bump — `[Unreleased]` continues. Process-control suite
+(start_process / interact / list_process / kill_process) is held for
+wave 2b.
+
+### Changed — existing tools
+
+- **`edit_file`** gains an optional `with_diff: boolean` input (default
+  `true`, preserving the v0.4 §I "diff field always populated"
+  invariant). Pass `with_diff: false` to suppress the response `diff`
+  body on large multi-edit batches where only `replacements_made`
+  matters. The diff body is also now capped at 16 KB: overflow
+  truncates with a trailing `... [N more bytes truncated]\n` marker
+  and the response carries `truncated_diff: true`. Spec amendment
+  §Y.1.
+- **`grep`** gains explicit pagination. New input fields `offset?`
+  (default 0) and `limit?` (default 50, hard cap 500) carve a half-open
+  window over the match sequence. `max_matches` is retained as a v0.6
+  legacy alias — if both `limit` and `max_matches` are supplied, `limit`
+  wins. Response gains `total_matches` (count across the whole search,
+  capped at 10 000 with `total_matches_capped: true` on overflow) and
+  `next_offset?` (set iff more results follow the current page).
+  Default-call behaviour is unchanged for callers that didn't paginate.
+  Spec amendment §Y.2.
+- **`execute_command`** surfaces diagnostic hints when stderr matches a
+  known cryptic-failure signature. New optional `hints: string[]`
+  envelope field — first entry covers PowerShell's "Cannot run a
+  document in the middle of a pipeline" error (cryptic when an agent
+  tries to invoke `ssh.exe` or other non-PE binaries through
+  powershell). Raw stderr is preserved verbatim; hints are additive
+  and NOT persisted to the audit log. Spec amendment §Y.3.
+
+### Added — infrastructure
+
+- New module `src/core/exec_hints.ts` — small registry of
+  `{ marker, hint }` entries for the execute_command hints feature.
+  Substring-anchored, case-insensitive, intentionally
+  append-only. Wave 2a adds 1 entry; future hints add one entry each.
+
+### Docs
+
+- Spec amendment §Y.4 — ETIMEDOUT response shape examples for
+  `execute_command`, `ssh_exec`, and `run_python` (the three
+  timeout-capable tools). Documents the flag-vs-error envelope split
+  side-by-side so agents can predict the shape without trial-and-error.
+- Spec amendment §Y.5 + README "Local working config" section — worked
+  example of overriding `config.sshExePath` for Git-bundled
+  (`C:\Program Files\Git\usr\bin\ssh.exe`) or MSYS2
+  (`C:\msys64\usr\bin\ssh.exe`) OpenSSH installs. Wave 1 wired the
+  config field but the override syntax was undocumented because
+  `configs/local.json` is gitignored.
+
+### Tests
+
+- `tests/unit/editor/edit_file_with_diff.test.ts` (6): default-true
+  body, opt-out via `with_diff: false`, dry_run + opt-out, multi-edit
+  combined diff, oversized-diff truncation marker, under-cap absence
+  of `truncated_diff`.
+- `tests/unit/search/grep_pagination.test.ts` (5): default first-page
+  semantics, walk-through pages via offset/limit, offset past the end,
+  EINVAL on negative offset, legacy `max_matches` alias still works.
+- `tests/unit/exec/execute_command_hints.test.ts` (4): hint attached on
+  marker, case-insensitive substring match, no-marker absence,
+  empty-stderr absence. Spawn is mocked via `vi.spyOn(execSafety,
+  "spawnSubprocess")` so the suite doesn't need PowerShell to fail
+  this way on the host.
+- `tests/invariants/structured_content.test.ts` (+1 key): grep
+  envelope grew `total_matches` — invariant updated to match.
+
+Net: 325 → 340 passing (+15 tests, no regressions).
+
 ## [Unreleased] — v0.7 wave 1
 
 Three additions from the 2026-05-18 ecom-session consumer-agent feedback
