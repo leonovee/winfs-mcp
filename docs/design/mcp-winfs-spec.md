@@ -1095,3 +1095,103 @@ v0.5 field `occurrences` removed; no back-compat shim. Callers parsing the old f
 Example: a 3-edit batch with `expected_count` of `[2, 1, 5]` reports `replacements_made: 8`, not `3`.
 
 `dry_run: true` still reports `replacements_made` matching what would have been written. The diff is computed against the post-replacement buffer regardless of `dry_run`.
+
+### 2026-05-19 — v0.7 wave 1: §X ssh_exec + list_path_dirs + write_json
+
+**Motivation.** Three additions surfaced by the 2026-05-18 ecom-session consumer-agent report (archived verbatim in the appendix of `prompts/cc-prompt-v0.7-wave1-ssh-listpath-writejson.md`). Each one is independent of the main v0.7 DC-parity wave (features A–D in the roadmap) and ships ahead of it. Net surface delta: 30 (v0.6) → 33 (v0.7 wave 1). New error codes: `ESSHNOTFOUND`, `EHOST_UNKNOWN`, `EEXT_NOT_JSON` (catalog §5 entries appended below). Three new MUTATION_TOOLS members: `ssh_exec`, `write_json` (mutation), plus `list_path_dirs` (read-only).
+
+**§X.1. `ssh_exec` tool contract.**
+
+New tool under `src/tools/system/ssh_exec.ts`. First-class SSH remote execution via direct `child_process.spawn` on the OpenSSH binary. Designed to sidestep three stacked failures that make `execute_command` unreliable for ssh on Windows hosts: (a) the sanitized PATH excludes `C:\Windows\System32\OpenSSH`; (b) PowerShell's pipeline parser rejects `ssh.exe` with `Cannot run a document in the middle of a pipeline`; (c) v0.5.x known bug #2 (empty stdout + exit 0 on direct `& 'ssh.exe' -V` through execute_command).
+
+**Input schema:**
+
+- `host: string` (1..256 chars). MUST be a Host alias resolvable via `ssh -G <host>` against `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`). Strings containing `@` are rejected up-front as raw `user@host` form.
+- `command: string` (1..8 KB). Verbatim remote command; passed as a single argv element to ssh.
+- `timeout_seconds?: number` (1..300, default 30). Effective max is also clamped by `config.maxTimeoutMs` via the standard `runTool` wrapper; raise the config knob if longer ssh sessions are required.
+
+**Output schema:**
+
+- `host: string` (echo of input).
+- `stdout: string` (decoded UTF-8, capped at 4 KB).
+- `stderr: string` (decoded UTF-8, capped at 4 KB).
+- `exit_code: number | null` (null on spawn failure / pre-exit kill).
+- `timed_out: boolean` (always present; `true` only on the no-error path).
+- `truncated_stdout?: boolean` (present only when set).
+- `truncated_stderr?: boolean` (present only when set).
+- `duration_ms: number`.
+
+**Behavior.** `fs.stat(sshExePath)` → fail-fast `ESSHNOTFOUND` if absent → host validation via `spawnSubprocess(sshExePath, ["-G", host], { deadlineMs: 5000, maxOutputBytes: 64 KB })` → require `exitCode === 0` AND stdout contains a non-empty `hostname <value>` line → cache `host` in a module-level `Map` for the server lifetime → spawn `sshExePath` with `[host, command]` as argv, `maxOutputBytes: 4096` per stream, `deadlineMs: timeout_seconds * 1000`. No shell, no PowerShell wrapper. Standard `spawnSubprocess` semantics for SIGTERM → SIGKILL escalation, process-tree kill on Windows via `taskkill /F /T /PID`.
+
+**Errors.**
+
+- `ESSHNOTFOUND` — `sshExePath` does not exist on disk (new error code; spec §5 catalog entry below).
+- `EHOST_UNKNOWN` — host validation failed: raw `user@host` form, `ssh -G` non-zero exit, validation timeout, or missing `hostname` line in `ssh -G` stdout. Details carry the exact reason (new error code).
+- `ETIMEDOUT` — child exceeded `timeout_seconds`. Details include `partial_stdout` / `partial_stderr` (each capped at 1 KB) for diagnostic value.
+- `EIO` — child failed to start asynchronously (`spawn` succeeded synchronously but the OS rejected the process). Mirror of the v0.6 §U `exec_safety` fix — `spawnFailed: true` flag in details, plus the OS error code in `errno`.
+
+**Mode behavior.** Allowed in both `strict` and `unrestricted` server modes. ssh_exec is deliberate egress gated by the user's `~/.ssh/config`, not by `allowedRoots`. The mutation-tool audit-record carries `mode` per invariant #30.
+
+**Audit redaction.** `command` is in `SENSITIVE_ARG_KEYS` — sanitizer replaces it with `<redacted: N bytes>`. `auditExtras` adds: `host` (full), `command_prefix` (first 256 chars), `command_length` (full), `truncated_at: 256`, plus on success `exit_code`, `timed_out`, `duration_ms`. Full command is NEVER persisted.
+
+**Documented prerequisite (not enforced).** Working ssh-agent or passphrase-less key. Non-interactive subprocesses on Windows don't inherit Pageant / agent state from interactive sessions; if your key has a passphrase, ssh_exec will hang waiting for stdin (which is `ignore`d) until the deadline.
+
+**Configuration.** New optional config field `sshExePath: string` (Zod schema, default `"C:\\Windows\\System32\\OpenSSH\\ssh.exe"`). No magic-confirm gate — ssh_exec's security boundary is the user's ssh config, not the binary path.
+
+**Invariant #35 — host whitelist via ssh -G is the ONLY validation.** No regex bypass, no "trusted hosts" config flag, no `user@host` raw-string acceptance. Validated hosts are cached for the server lifetime to avoid `ssh -G` overhead on every call; cache is process-local and cleared on restart.
+
+**§X.2. `list_path_dirs` tool contract.**
+
+New tool under `src/tools/system/list_path_dirs.ts`. Read-only introspection of the sanitized PATH that subprocesses inherit (`execute_command`, `find_command`, `run_python`, `run_pytest`, and now `ssh_exec` host validation). Lets agents debug "why is binary X invisible" without trial-and-error.
+
+**Input schema:** none (empty object, strict).
+
+**Output schema:** `{ path_dirs: string[], total: number }`. Envelope conforms to §F (`total === path_dirs.length`).
+
+**Implementation.** Returns `sanitizedPathDirs(config)` — the single-source-of-truth helper extracted from `src/core/exec_safety.ts`. `sanitizedPath(config)` (used by `buildExecEnv`) now joins this array with `;`. Order: System32, PowerShell 5.1, Windows, PowerShell 7, Git CLI, Git bin, Node, and (when configured) `pythonHome`.
+
+**Errors.** No tool-specific codes. `ETIMEDOUT` from the wrapper is theoretically reachable but effectively unreachable for an in-memory constant-time operation.
+
+**Mode behavior.** Read-only — audit entry omits `mode` per invariant #30.
+
+**§X.3. `write_json` tool contract.**
+
+New tool under `src/tools/file/write_json.ts`. Atomic JSON write, symmetric to v0.3 `read_json`. Closes the read-mutate-write round-trip workflow.
+
+**Input schema:**
+
+- `path: string` (absolute, inside allowedRoots in strict mode / anywhere in unrestricted). MUST end in `.json` (case-insensitive) on both the caller-supplied path AND the realpath-resolved path.
+- `value: unknown` (any JSON-serialisable value).
+- `indent?: number` (0..10, default 2). `0` produces compact output (no whitespace).
+- `overwrite?: boolean` (default `false`). Safer default than v0.1 `write` (which defaults to `true`) — JSON files are more often configuration than scratch data.
+- `mkdirParents?: boolean` (default `false`).
+
+**Output schema:** identical to v0.1 `write`: `{ bytes_written, lines_written, created }`.
+
+**Behavior.** Extension check on the caller-supplied path → `checkAllowed` with `allowMissing: true` → extension re-check on `realPath` (defense-in-depth against a `.json`-named symlink/junction pointing at a non-.json target) → parent existence check (+ optional `mkdir -p`) → existing-file check vs `overwrite` → `JSON.stringify(value, null, indent === 0 ? undefined : indent)` → append trailing newline → `atomicWriteFile` (the same temp + fsync + rename primitive as `write` and `edit_file`, via `src/core/atomic_write.ts`).
+
+**Errors.**
+
+- `EEXT_NOT_JSON` — caller-supplied path or resolved real path does not end in `.json` (new error code; spec §5 catalog entry below). Caught before any disk I/O.
+- `EPERM_ROOT` — strict mode + path outside allowedRoots.
+- `EEXIST` — file exists and `overwrite: false`.
+- `ENOENT` — parent directory missing and `mkdirParents: false`.
+- `EINVAL` — value is not JSON-serialisable (BigInt, cycle, function), OR `JSON.stringify` returned `undefined` (top-level function/symbol/undefined).
+- `EIO` — atomic write failed (most often a Windows file lock).
+- `ETIMEDOUT` — wrapper deadline.
+
+**Mode behavior.** Mutation; audit record carries `mode` per invariant #30. `value` is in `SENSITIVE_ARG_KEYS` — `sanitizeArgs` redacts it (string → byte count, array → item count, object → key count, primitives passed through).
+
+**Sanitizer object-key extension.** `sanitizeArgs` is extended to redact `object`-typed values at sensitive keys as `<redacted: N keys>`, symmetric with the existing `array → <redacted: N items>` rule. This extension is safe for existing tools because none of them passed an object at a sensitive key (all existing sensitive keys held strings or arrays). The change supports `write_json.value` carrying free-form JSON.
+
+**§X.4. Error code catalog additions.**
+
+| Code | Tool | Meaning |
+|---|---|---|
+| `ESSHNOTFOUND` | `ssh_exec` | `config.sshExePath` does not exist on disk. Install OpenSSH client or set the config field. |
+| `EHOST_UNKNOWN` | `ssh_exec` | `host` not resolvable via `ssh -G` (or raw `user@host` form rejected). Add a `Host` entry in `~/.ssh/config`. |
+| `EEXT_NOT_JSON` | `write_json` | Path does not end in `.json` (case-insensitive). Use `write` for non-JSON files. |
+
+**§X.5. `MUTATION_TOOLS` extension.**
+
+`MUTATION_TOOLS` (audit.ts) grows from 10 to 12 members: `+ write_json + ssh_exec`. `list_path_dirs` is read-only and is NOT added.
