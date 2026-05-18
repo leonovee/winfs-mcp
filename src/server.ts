@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "./core/config.js";
+import { ProcessRegistry } from "./core/process_registry.js";
 import { registerReadTool } from "./tools/fs/read.js";
 import { registerWriteTool } from "./tools/fs/write.js";
 import { registerAppendTool } from "./tools/fs/append.js";
@@ -33,12 +34,22 @@ import { registerWriteChunkTool } from "./tools/file/write_chunk.js";
 import { registerListPathDirsTool } from "./tools/system/list_path_dirs.js";
 import { registerWriteJsonTool } from "./tools/file/write_json.js";
 import { registerSshExecTool } from "./tools/system/ssh_exec.js";
+import { registerListProcessTool } from "./tools/system/list_process.js";
 
-export function createServer(config: ResolvedConfig): McpServer {
+export interface CreatedServer {
+  server: McpServer;
+  registry: ProcessRegistry;
+}
+
+export function createServer(config: ResolvedConfig): CreatedServer {
   const server = new McpServer({
     name: "mcp-winfs",
     version: config.version,
   });
+  // v0.7 wave 2b: ProcessRegistry is the first long-lived shared mutable
+  // state. Construction starts the GC sweep; shutdown() must be called on
+  // SIGINT/SIGTERM (wired in src/index.ts).
+  const registry = new ProcessRegistry(config);
 
   // v0.1 core
   registerReadTool(server, config);
@@ -91,5 +102,8 @@ export function createServer(config: ResolvedConfig): McpServer {
   registerWriteJsonTool(server, config);
   registerSshExecTool(server, config);
 
-  return server;
+  // v0.7 wave 2b — process control suite
+  registerListProcessTool(server, config, registry);
+
+  return { server, registry };
 }

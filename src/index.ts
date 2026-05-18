@@ -30,7 +30,25 @@ async function main(): Promise<void> {
     );
   }
 
-  const server = createServer(config);
+  const { server, registry } = createServer(config);
+
+  // v0.7 wave 2b: SIGINT/SIGTERM handler drains the process registry so any
+  // children we spawned via start_process are SIGKILL'd before the server
+  // exits. 10 s hard deadline inside registry.shutdown().
+  let shuttingDown = false;
+  const onShutdown = (signal: NodeJS.Signals): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    process.stderr.write(`mcp-winfs received ${signal}, shutting down…\n`);
+    registry
+      .shutdown()
+      .catch(() => {
+        /* swallow: best-effort drain */
+      })
+      .then(() => process.exit(0));
+  };
+  process.on("SIGINT", onShutdown);
+  process.on("SIGTERM", onShutdown);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
