@@ -105,6 +105,18 @@
 
 **Важно:** конфиг ДОЛЖЕН быть UTF-8 БЕЗ BOM. PowerShell `Set-Content -Encoding UTF8` добавляет BOM — использовать `Out-File -Encoding utf8NoBOM` или текстовый редактор с явным контролем.
 
+### 3.1. Runtime vs dev fixtures
+
+Файлы `configs/default.json` и `configs/local.json` в репозитории — это
+**development-time fixtures**, используемые тестами и для документации
+схемы. Они **НЕ загружаются runtime-сервером**. Фактический lookup-путь
+конфига: `%LOCALAPPDATA%\mcp-winfs\config.json` (разрешается через
+переменную окружения `LOCALAPPDATA`, либо через платформенный default —
+см. `defaultConfigPath()` в `src/core/config.ts`). Если этот файл
+отсутствует, сервер стартует с пустыми `allowedRoots`, и каждый
+path-bound вызов возвращает `EPERM_ROOT` с хинтом, указывающим на тот
+же ожидаемый путь.
+
 ---
 
 ## 4. Tool Inventory (29 инструментов)

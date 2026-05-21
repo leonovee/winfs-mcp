@@ -3,6 +3,63 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased] — v0.7 tails (docs + cleanup)
+
+Pre-review-wave sweep. Five small items that accumulated across waves
+1 / 2a / 2b. No new tools, no version bump, no behaviour change for
+existing happy paths.
+
+### Changed — docs
+
+- **CLAUDE.md** — new "Операционные заметки" subsection documenting the
+  MCP-transport occasional-hang pattern (2–3 four-minute timeouts on the
+  same call, then the next call returns instantly) and the
+  retry → tray-exit → kill-orphan-`node.exe` recovery sequence.
+- **README** — `## Configure` section renamed to `## Configuration`, with
+  an explicit bootstrap note (file is not created automatically; until it
+  exists the server starts with empty `allowedRoots` and every path-bound
+  tool returns `EPERM_ROOT`) and a new paragraph clarifying that
+  `configs/default.json` and `configs/local.json` are dev-time fixtures,
+  not loaded at runtime.
+- **`docs/design/mcp-winfs-spec.md`** — new §3.1 "Runtime vs dev fixtures"
+  paragraph mirroring the README note. Points at `defaultConfigPath()` in
+  `src/core/config.ts` as the source of truth for the lookup path.
+- **`configs/README.md`** (new) — explains the role of `default.json`
+  (baseline / schema reference) vs `local.json` (gitignored dev override
+  for Inspector) vs `%LOCALAPPDATA%\mcp-winfs\config.json` (runtime).
+  Also documents the no-JSON-comments rationale (`CONFIG_SCHEMA` is
+  `.strict()`).
+
+### Changed — code
+
+- **`src/core/allowed_roots.ts`** — when `allowedRoots` is empty the
+  `EPERM_ROOT` hint now embeds the resolved absolute config path
+  (`No allowedRoots configured. Edit C:\Users\<USER>\AppData\Local\mcp-winfs\config.json to add one. See README §Configuration.`)
+  instead of the generic `"Edit config.json to add one"`. Path computed
+  via the now-exported `defaultConfigPath()` from `src/core/config.ts`.
+- **`src/core/config.ts`** — `defaultConfigPath` is now exported (was
+  module-private). Single-line change, no behaviour delta on the
+  loadConfig path.
+
+### Cleanup
+
+- **`configs/default.json`** — `allowedRoots` reduced from three
+  prior-machine user-specific paths (`C:\Users\Expert\…`) to `[]`. This
+  file ships in the repo and must not contain per-machine paths.
+- **`scripts/restart-winfs.ps1`** — five em-dash characters (`—`,
+  U+2014) replaced with ASCII hyphens (two in comments, three in
+  `Write-Host` strings). Avoids PowerShell parser surprises on hosts
+  whose default code page isn't UTF-8.
+
+### Tests
+
+- `tests/invariants/allowed_roots.test.ts` (+1): regression for the new
+  hint format. When `resolvedAllowedRoots` is empty the `EPERM_ROOT`
+  hint must equal the exact `defaultConfigPath()`-embedded string, not
+  the legacy `Edit config.json` placeholder.
+
+Net: 371 → 372 passing.
+
 ## [Unreleased] — v0.7 wave 2b (process control suite)
 
 Largest single DC-parity addition. Introduces the first long-lived

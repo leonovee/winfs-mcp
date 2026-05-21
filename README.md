@@ -27,10 +27,14 @@ npm run build
 
 Requires Node ≥ 18.
 
-## Configure
+## Configuration
 
-The server reads its config from a JSON file. By default it looks at
-`%LOCALAPPDATA%\mcp-winfs\config.json`; override with `--config <path>`.
+The server reads its runtime config from
+`%LOCALAPPDATA%\mcp-winfs\config.json` (typically
+`C:\Users\<USER>\AppData\Local\mcp-winfs\config.json`); override with
+`--config <path>`. **The file is not created automatically** — until it
+exists, the server starts with empty `allowedRoots` and every path-bound
+tool returns `EPERM_ROOT` with a hint pointing at this same path.
 
 Minimum viable config:
 
@@ -44,7 +48,13 @@ Minimum viable config:
 
 Every other field defaults to spec §3 values (10s timeouts, 10 MB read cap,
 audit at `%LOCALAPPDATA%\mcp-winfs\audit.jsonl`, …). See `configs/default.json`
-for the full schema.
+for the full schema and `configs/README.md` for the dev-fixture vs runtime
+distinction.
+
+**`configs/default.json` and `configs/local.json` in the repository are
+development-time fixtures and are NOT loaded at runtime** — they exist for
+tests and as a schema reference. Do not edit them expecting changes to take
+effect; edit `%LOCALAPPDATA%\mcp-winfs\config.json` instead.
 
 **The config file MUST be UTF-8 without a BOM.** `Set-Content -Encoding UTF8`
 in PowerShell adds a BOM and breaks `JSON.parse`. Safe write:

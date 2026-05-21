@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import type { ResolvedConfig } from "./config.js";
+import { defaultConfigPath, type ResolvedConfig } from "./config.js";
 import { buildError, type StructuredError } from "./errors.js";
 
 /**
@@ -137,7 +137,7 @@ export async function checkAllowed(
       details: { resolved: normReal, attempted: absolute },
       hint:
         config.resolvedAllowedRoots.length === 0
-          ? "No allowedRoots configured. Edit config.json to add one."
+          ? `No allowedRoots configured. Edit ${defaultConfigPath()} to add one. See README §Configuration.`
           : `allowedRoots: ${config.resolvedAllowedRoots.join(", ")}`,
     });
   }

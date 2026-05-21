@@ -84,7 +84,7 @@ export function expandEnv(input: string): string {
   return input.replace(/%([^%]+)%/g, (_, name: string) => process.env[name] ?? `%${name}%`);
 }
 
-function defaultConfigPath(): string {
+export function defaultConfigPath(): string {
   const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
   return path.join(localAppData, "mcp-winfs", "config.json");
 }

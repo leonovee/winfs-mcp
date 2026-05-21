@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { checkAllowed } from "../../src/core/allowed_roots.js";
 import { readImpl } from "../../src/tools/fs/read.js";
 import { makeTempConfig, cleanupTempConfig } from "../helpers.js";
-import type { ResolvedConfig } from "../../src/core/config.js";
+import { defaultConfigPath, type ResolvedConfig } from "../../src/core/config.js";
 
 describe("invariant: allowedRoots realpath canonicalization (spec §2.2)", () => {
   let config: ResolvedConfig;
@@ -48,6 +48,26 @@ describe("invariant: allowedRoots realpath canonicalization (spec §2.2)", () =>
     await fs.writeFile(target, "ok", "utf8");
     const res = await checkAllowed(target, config);
     expect("realPath" in res).toBe(true);
+  });
+
+  it("EPERM_ROOT hint embeds resolved defaultConfigPath when allowedRoots is empty (v0.7 tails)", async () => {
+    const emptyConfig: ResolvedConfig = {
+      ...config,
+      allowedRoots: [],
+      resolvedAllowedRoots: [],
+    };
+    const probe =
+      process.platform === "win32" ? "C:\\Windows\\System32\\drivers\\etc\\hosts" : "/etc/hosts";
+    const res = await checkAllowed(probe, emptyConfig);
+    expect("ok" in res && res.ok === false).toBe(true);
+    if (!("ok" in res) || res.ok !== false) throw new Error("expected error");
+    expect(res.error.code).toBe("EPERM_ROOT");
+    const expectedPath = defaultConfigPath();
+    expect(res.error.hint).toBe(
+      `No allowedRoots configured. Edit ${expectedPath} to add one. See README §Configuration.`,
+    );
+    expect(res.error.hint).not.toMatch(/^No allowedRoots configured\. Edit config\.json/);
+    expect(path.isAbsolute(expectedPath)).toBe(true);
   });
 
   it("symlink/junction escape outside allowed root is blocked (skipped if symlink unavailable)", async () => {
