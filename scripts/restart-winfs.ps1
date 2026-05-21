@@ -14,10 +14,10 @@
 #   - Requires Claude Desktop or Claude.ai to be configured to auto-respawn MCP servers
 #     (this is the default for Claude Desktop via mcpServers config)
 #   - If Claude.ai web client lost the MCP connection at the websocket level, killing
-#     the node process won't help — you need to refresh the browser tab or reconnect
+#     the node process won't help - you need to refresh the browser tab or reconnect
 #     MCP in Claude.ai settings
 #   - On rare cases the MCP host caches the server's tool schema and won't pick up
-#     code changes until full Claude restart — for those, use the in-band restart_server
+#     code changes until full Claude restart - for those, use the in-band restart_server
 #     tool (planned for v0.6) which signals the host to re-handshake
 
 [CmdletBinding()]
@@ -51,7 +51,7 @@ Write-Host "Found $($winfsProcs.Count) winfs node process(es):"
 foreach ($p in $winfsProcs) {
     Write-Host "  PID $($p.ProcessId)" -ForegroundColor Gray -NoNewline
     if ($Verbose) {
-        Write-Host " — $($p.CommandLine.Substring(0, [Math]::Min(120, $p.CommandLine.Length)))..."
+        Write-Host " - $($p.CommandLine.Substring(0, [Math]::Min(120, $p.CommandLine.Length)))..."
     } else {
         Write-Host ""
     }
@@ -79,10 +79,10 @@ Write-Host "`nStopped $stopped/$($winfsProcs.Count) process(es)." -ForegroundCol
 if ($stopped -gt 0) {
     Write-Host "`nNext steps:"
     Write-Host "  1. Wait 2-3 seconds for OS cleanup"
-    Write-Host "  2. Issue any winfs tool call from Claude — host will respawn the server"
+    Write-Host "  2. Issue any winfs tool call from Claude - host will respawn the server"
     Write-Host "     (if Claude Desktop is configured to auto-launch the MCP server, this is automatic)"
     Write-Host "  3. If respawn doesn't happen, check Claude Desktop's developer console / log"
-    Write-Host "     for spawn errors (often MSIX node PATH issue — use absolute node.exe path)"
+    Write-Host "     for spawn errors (often MSIX node PATH issue - use absolute node.exe path)"
 }
 
 Write-Host "`nUsage:"
