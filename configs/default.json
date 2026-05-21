@@ -1,9 +1,5 @@
 {
-  "allowedRoots": [
-    "C:\\Users\\Expert\\Desktop\\eCom",
-    "C:\\Users\\Expert\\Desktop\\AI\\ai-judge",
-    "C:\\Users\\Expert\\Dropbox\\Projects"
-  ],
+  "allowedRoots": [],
   "allowedUrlHosts": [
     "raw.githubusercontent.com"
   ],
