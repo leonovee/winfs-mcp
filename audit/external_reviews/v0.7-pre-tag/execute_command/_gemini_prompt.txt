@@ -1,0 +1,102 @@
+You are performing a security and correctness code review of execute_command.ts, the most security-critical mutation surface in the winfs-mcp project. It spawns arbitrary user-controlled shell commands inside allowedRoots via PowerShell dispatch.
+
+## Source under review: src/tools/exec/execute_command.ts (HEAD a885126)
+
+Key facts about the implementation:
+- composed = args.command + ' ' + args.args.join(' ') (line 80)
+- blocklist check via checkExecBlocklist(composed, config) before spawn
+- cwd resolved against allowedRoots, stat-verified as directory
+- bin = 'powershell.exe' on win32, 'pwsh' otherwise
+- psArgs = ['-NoProfile', '-NonInteractive', '-Command', composed]
+- spawnSubprocess called via execSafety.spawnSubprocess (namespace import for vi.spyOn testability)
+- diagnoseHints(spawnRes.stderr) called after spawn; empty array omits hints field
+- auditByResult WeakMap stores composed_prefix (first 64 chars), composed_length, stdout_prefix (4KB), stderr_prefix (4KB), truncated_at_audit
+
+## Reference: src/core/exec_safety.ts
+
+DEFAULT_EXEC_BLOCKLIST patterns (case-insensitive regex):
+- "Remove-Item\s.*-Recurse"
+- "Remove-Item\s.*-rf"
+- "rm\s.*-rf"
+- "rmdir\s.*\/[Ss]"
+- "del\s.*\/[Ss]"
+- "format\s+[A-Za-z]:"
+- "Format-Volume"
+- "Initialize-Disk"
+- "Clear-Disk"
+- "Reset-PhysicalDisk"
+- "cipher\s+\/w"
+- "Optimize-Volume\s.*ReTrim"
+- "bcdedit"
+- "bcdboot"
+- "reg\s+delete\s+HK(LM|EY_LOCAL_MACHINE)"
+- "Remove-ItemProperty\s.*HKLM:"
+- "shutdown"
+- "Restart-Computer"
+- "Stop-Computer"
+- "Stop-Process\s.*-Force"
+- "taskkill\s.*\/F"
+- "net\s+user\s+.*\/add"
+- "Add-LocalUser"
+- "New-LocalUser"
+- "Invoke-WebRequest.*\|\s*Invoke-Expression"
+- "Invoke-Expression\s+\(.*Invoke-WebRequest"
+- "iex\s+\(.*iwr"
+- "curl\s.*\|\s*(bash|sh|pwsh|powershell)"
+- "wget\s.*\|\s*(bash|sh|pwsh|powershell)"
+
+Blocklist cache: module-level _compiled and _compiledKey; cache key = extra.join('|||'). Does NOT include DEFAULT_EXEC_BLOCKLIST in the key.
+
+sanitizedPathDirs returns: C:\Windows\System32, C:\Windows\System32\WindowsPowerShell\v1.0, C:\Windows, C:\Program Files\PowerShell\7, C:\Program Files\Git\cmd, C:\Program Files\Git\bin, C:\Program Files\nodejs, optional pythonHome.
+
+buildExecEnv: if execSanitizeEnv=true: only PATH+USERPROFILE+LOCALAPPDATA+SYSTEMROOT+TEMP survive; else: inherits process.env but overrides PATH/Path.
+
+spawnSubprocess: Node child_process.spawn with windowsHide:true, stdio:['ignore','pipe','pipe']. Bounded output capture per stream. Deadline: SIGTERM at deadlineMs, SIGKILL after 2s if !settled. AbortSignal: onAbort does SIGTERM then 2s SIGKILL. Windows taskkill /F /T /PID for tree kill. timedOut flag set only in deadline path, not in abort path.
+
+cwdCheck cast: cwd = (cwdCheck as { realPath: string }).realPath — unsafe cast pattern.
+
+## Reference: src/core/exec_hints.ts
+
+HINT_REGISTRY contains one entry:
+  marker: "Cannot run a document in the middle of a pipeline"
+  hint: "PowerShell refused to execute the target binary as a process. This typically means the binary is missing from PATHEXT or has an unusual file association registered. Try invoking it via a different shell (cmd) or with the full path, or use a passthrough tool if available."
+
+diagnoseHints(stderr): case-insensitive substring match, returns matched hints array.
+
+## Review questions — answer each with a severity-tagged finding
+
+Q1 (output capture via & operator): Empirically observed: when composed = '& "C:\path\git.exe" status', stdout/stderr come back empty though the command executes. PowerShell -Command with & operator invokes a child process. stdio:['ignore','pipe','pipe'] should capture PowerShell's stdout, which should include the child's output when run via &. Analyze: does -NonInteractive affect pipe inheritance? Is there a PowerShell output buffering issue? Is windowsHide:true a factor? What is the actual root cause? Severity and fix recommendation.
+
+Q2 (argument composition quoting hazard): args.join(' ') without quoting. Contract says caller bears quoting. But the field name 'args' implies spawn-style positional args. A path with spaces in args[] will break. Evaluate: should the impl add EINVAL guard for whitespace-containing args, or auto-quote with PowerShell single-quote escaping, or document more prominently? Current MAX_ARGS_LEN=64 entries * 2048 chars each means a huge unquoted string is possible. Severity and recommendation.
+
+Q3 (blocklist bypass): Analyze these specific vectors:
+  (a) EncodedCommand: command='powershell -EncodedCommand <base64 of Remove-Item -Recurse C:\>'  — base64 bypasses pattern match
+  (b) PS aliases: rm -r C:\ — blocklist has "rm\s.*-rf" but not "rm\s.*-r\b" (short flag -r is NOT caught by -rf pattern)
+  (c) Variable indirection: $x = 'Remove-Item'; & $x -Recurse C:\ — does "Remove-Item\s.*-Recurse" match with semicolon separation? The composed string contains 'Remove-Item' and '-Recurse' but with other chars between. Does .* in the regex span the full string? Answer: yes, .* matches anything including spaces and semicolons in a single line, so '$x = "Remove-Item"; & $x -Recurse C:\' would NOT match because the pattern 'Remove-Item\s.*-Recurse' requires Remove-Item to be immediately followed by whitespace then eventually -Recurse. In the indirection case 'Remove-Item' appears as a string literal in quotes, not as a command invocation — but the raw text still contains 'Remove-Item' followed by '-Recurse' later. Check if it matches.
+  (d) Blocklist cache bug: cache key = extra.join('|||') only. If process has multiple ResolvedConfig instances with different DEFAULT_EXEC_BLOCKLIST (e.g., monkey-patched in tests), cached compiled patterns would be stale. How severe?
+  (e) Is -EncodedCommand itself blocked? No pattern covers it.
+
+Q4 (PATH sanitization — non-standard git): sanitizedPathDirs hardcodes 'C:\Program Files\Git\cmd'. Non-standard git installs: C:\Program Files (x86)\Git\cmd (32-bit), scoop (%USERPROFILE%\scoop\apps\git), choco (C:\ProgramData\chocolatey\bin), portable git. find_command returned found:false on operator machine. Is there a dynamic resolution option? What is the spec invariant gap?
+
+Q5 (AbortSignal + process tree kill): Three sub-issues:
+  (a) If abort fires before spawn() returns pid (child.pid === undefined), killTree is a no-op (early guard: if (pid === undefined) return). Child is alive but untracked — orphan risk.
+  (b) timed_out flag set only by deadline path. onAbort does NOT set timedOut=true. Caller sees timed_out:false + exit_code:null — cannot distinguish abort from normal exit-null.
+  (c) taskkill /T kills child tree only if processes share the same job object or parent chain. Start-Process with -PassThru inside the spawned PowerShell creates a detached process that escapes /T scope.
+
+Q6 (hints omitted from audit): diagnoseHints result NOT stored in auditByResult. If stderr > 4KB and the cryptic marker appears after the 4KB cutoff, the audit record will miss it but the live response would have included the hint. Is this a gap? Severity?
+
+Q7 (hint accuracy for 'Cannot run a document in the middle of a pipeline'): The actual PowerShell error "Cannot run a document in the middle of a pipeline" occurs when: (1) user passes a bare .ps1 script path to -Command, PowerShell tries to execute it as a document (file), and the pipeline context rejects this; or (2) PATHEXT and file association routing. The hint text says "PATHEXT or unusual file association" and suggests "Try invoking it via a different shell (cmd)". Given that this tool ONLY dispatches through PowerShell and never cmd.exe, the advice "try cmd" is inapplicable and potentially confusing. Evaluate accuracy and actionability of the hint.
+
+Q8 (blocklist taskkill /F coverage): Pattern "taskkill\s.*\/F" blocks any taskkill call with /F anywhere in the composed string. This means a caller cannot do 'taskkill /IM process.exe /F' even if the intent is legitimate process management. Also: is the blocklist correct to block ALL taskkill /F usage given that the tool description says it's a mutation tool? Evaluate: is the pattern correctly scoped, and should it be narrowed (e.g., also require /T or /PID)?
+
+Q9 (cwdCheck cast): Line: cwd = (cwdCheck as { realPath: string }).realPath. If checkAllowed's success return type has a different shape (e.g., { ok: true, realPath: string } or just a string), the cast may silently produce undefined. This is a TypeScript-unsafety concern. Evaluate risk.
+
+## Output format
+
+For each question Q1-Q9, output a finding with:
+- Severity: P0 / P1 / P2 / P3 (or "no issue found")
+- Title (one line)
+- Analysis (3-6 sentences)
+- Fix recommendation (1-3 sentences)
+
+At the end, provide a summary table: | Q | Severity | Title |
