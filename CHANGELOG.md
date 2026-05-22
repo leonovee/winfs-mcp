@@ -3,10 +3,80 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased]
+## [Unreleased] — v0.7 wave 2c (architectural closure)
 
-(Future patch wave: Windows-flaky process tests, deferred P2 review-wave
-findings. See README §"Known limitations" for the deferred list.)
+Three architectural / methodological items consolidated while the
+codebase is fresh and no downstream consumer depends on the internal
+signatures. No user-facing behaviour change.
+
+### Changed — register*Tool signature (internal API)
+
+`register*Tool(server, config, ...)` → `register*Tool(server, ctx: ToolContext)`.
+Every tool registration now takes a single `ctx` object holding `config`
+and the `ProcessRegistry`. Pre-wave: 33 tools had `(server, config)`,
+4 wave-2b tools had `(server, config, registry)`. Future stateful
+subsystems (FileWatchRegistry, JobQueue, etc.) add a field to the
+context interface instead of a positional parameter to every register
+call site.
+
+Migration note for downstream consumers of the public exports:
+```ts
+// before
+const { server, registry } = createServer(config);
+registerReadTool(server, config);
+registerStartProcessTool(server, config, registry);
+
+// after
+const { server, ctx } = createServer(config);
+registerReadTool(server, ctx);
+registerStartProcessTool(server, ctx);
+```
+
+If you build a custom `ToolContext` directly (e.g. in a test harness),
+construct via `createToolContext({ config, registry })` from
+`src/core/tool_context.js`.
+
+### Changed — createServer return shape
+
+```ts
+// before
+{ server: McpServer; registry: ProcessRegistry }
+
+// after
+{ server: McpServer; ctx: ToolContext }   // ctx.registry, ctx.config
+```
+
+`src/index.ts` reaches the registry as `ctx.registry.shutdown()` in
+its SIGINT/SIGTERM handler.
+
+### Docs
+
+- **Spec invariant #41 — stateful sessions settle by close-event only.**
+  Generalises wave 2b's invariant #38 (ProcessRegistry-specific) to
+  every future stateful subsystem. The same close-event-driven settle
+  pattern (intent-to-terminate sets a flag; close event drives the
+  actual state transition) becomes the reference for any future file
+  watcher / network connection / persistent shell / job queue. Spec
+  amendment §AB.1.
+- **Spec amendment §AB.2 — ToolContext interface and extension rule.**
+  Documents the new internal API + the four-step procedure for adding
+  a new stateful subsystem (add field → construct in createServer →
+  destructure in tools that need it → apply invariant #41).
+- **Spec amendment §AB.3 — back-reference to the methodology note in
+  CLAUDE.md** for blocklist-fix verify-then-smoke.
+- **CLAUDE.md** — new "Blocklist-pattern fixes from external review
+  require verify-then-smoke" subsection under Операционные заметки.
+  Documents the two-sided risk (under-block + over-block) and the
+  pre-fix verify / post-fix smoke procedure that catches both.
+  Reference incident: the v0.7 pre-tag `-EncodedCommand` over-block
+  caught by smoke + fixed via positive-lookahead context anchor.
+
+### Tests + smoke
+
+No code-behaviour change → no test or smoke count delta. Suite
+remains at 408 passing (excluding the 10 pre-existing Windows-flaky
+`tests/unit/process/*` tests still on the future-patch list). Smoke
+remains at 57/57 probes green.
 
 ## [0.7.2] — 2026-05-22 — PowerShell wrapper hardening (H2 from v0.7.1 prompt)
 
