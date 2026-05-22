@@ -16,8 +16,21 @@ export const DEFAULT_EXEC_BLOCKLIST: readonly string[] = [
   "Remove-Item\\s.*-Recurse",
   "Remove-Item\\s.*-rf",
   "rm\\s.*-rf",
+  // P1.2 (v0.7 pre-tag bug-fix): rm aliases for Remove-Item accept short
+  // recursive flags. Pre-fix only the combined `-rf` matched; `rm -r`,
+  // `rm -R`, and `rm -Recurse` all bypassed.
+  "rm\\s.*-[rR]\\b",
+  "rm\\s.*-Recurse\\b",
   "rmdir\\s.*\\/[Ss]",
   "del\\s.*\\/[Ss]",
+  // P1.1 (v0.7 pre-tag bug-fix): -EncodedCommand smuggles a base64-encoded
+  // PowerShell payload past every other blocklist pattern (the destructive
+  // verbs are encoded in base64; the literal patterns never match). Block
+  // every prefix PowerShell accepts: `-e`, `-en`, `-enc`, …, `-EncodedCommand`.
+  // Pattern is case-insensitive (compiled with `i` flag). Explicit-alternation
+  // form is chosen over `-e\\w{0,14}` to avoid over-blocking `-ExecutionPolicy`
+  // or `-Examine` which start with `-e` but are not the encoded-command path.
+  "(?:^|\\s)-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\\s",
   // Disk / partition operations
   "format\\s+[A-Za-z]:",
   "Format-Volume",
