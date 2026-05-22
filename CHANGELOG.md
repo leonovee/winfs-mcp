@@ -3,6 +3,93 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased] — v0.8 filesystem-MCP parity (P2 + P4 bundle)
+
+Items distilled from a 2026-05-22 comparison of winfs against the
+reference `@modelcontextprotocol/server-filesystem` (see
+`backlog/v0.8-filesystem-mcp-parity.md`). Bundles the P2 annotation
+sweep + four P4 small parity items. P1 (MCP Roots protocol) and P3
+(audit IO investigation) remain in the backlog for separate waves.
+
+Tool surface: 37 → 39 (+2 new tools).
+
+### Added — new tools (2)
+
+- **`directory_tree`** — recursive JSON tree of a directory:
+  `{ root: { name, type: 'directory' | 'file', children?: TreeNode[] },
+  total_nodes, truncated, truncated_reason? }`. Companion to flat-array
+  `list`; use this when reasoning about project layout in one
+  round-trip. Args: `path`, `max_depth` (1..8, default 3),
+  `exclude_patterns` (optional basename globs — `'node_modules'`,
+  `'.git'`, `'dist'`, `'*.tmp'`). Truncates with
+  `truncated_reason: 'max_depth'` or `'max_nodes'` (10 000 hard cap).
+  Symlinks walked as files (not followed) to avoid escape paths.
+
+- **`read_media_file`** — base64 reader for binary files (image, audio,
+  video, PDF). Companion to text-only `read` (which rejects binary with
+  EENCODING). Streams in 64 KB chunks via `createReadStream` to avoid
+  OOM on large media. Returns
+  `{ base64, content_type, bytes_read, truncated }` where
+  `content_type` is best-effort from the file extension (image/png,
+  image/jpeg, image/webp, application/pdf, audio/mpeg, video/mp4, …;
+  unknown → application/octet-stream). Default 16 MB cap; omitting
+  `max_bytes` on an oversize file → ETOOLARGE (caller hasn't opted in
+  to truncation).
+
+### Changed — existing tools
+
+- **`read`** — new `head: N` and `tail: N` convenience params. Compose
+  internally to the existing range path (head → `[1, N]`; tail →
+  `[max(1, total-N+1), total]`). Mutually exclusive with each other and
+  with `range`; passing two → EINVAL with discriminating
+  `details.{has_range, has_head, has_tail}`. ETOOLARGE hint extended.
+
+- **`list`** — new `sort_by: 'name' | 'size' | 'mtime'` param. `'name'`
+  alphabetical (case-insensitive `localeCompare`); `'size'` descending
+  (largest first — storage-cleanup ergonomics); `'mtime'` descending
+  (newest first — recent-activity ergonomics). Omitted → directory-walk
+  order (the prior contract is unchanged for callers that don't pass
+  sort_by).
+
+- **`copy`** annotation: `destructiveHint: false → true`. Matches
+  `move`'s semantics — copy with `overwrite: true` may overwrite the
+  destination, so the conservative MCP annotation is destructive. The
+  other 36 register*Tool annotations were spot-checked and found
+  correct as-is.
+
+### Tests + smoke
+
+- 408 → 433 passing (+25 across 4 new test files; excluding the 10
+  pre-existing Windows-flaky `tests/unit/process/*` tests carried
+  from v0.7.x):
+  - `tests/unit/fs/read_head_tail.test.ts` (+7): head, tail,
+    overshoot, head+tail mutex, head+range mutex, tail+range mutex,
+    all-three mutex.
+  - `tests/unit/fs/list_sort_by.test.ts` (+4): sort_by name / size /
+    mtime + omit-preserves-walk-order sentinel.
+  - `tests/unit/fs/directory_tree.test.ts` (+7): happy, nested,
+    exclude_patterns basename, exclude_patterns glob, max_depth=1
+    truncates with `truncated_reason: 'max_depth'`, EPERM_ROOT outside
+    roots, ENOTDIR on file path.
+  - `tests/unit/file/read_media_file.test.ts` (+7): PNG round-trip,
+    content-type mapping (8 extensions), unknown extension → octet-
+    stream, ETOOLARGE without max_bytes, max_bytes truncate contract
+    (`truncated: true` + exact bytes_read), EPERM_ROOT, EISDIR.
+
+- Smoke 55 → 66 probes (+9 in new probesV08 section): read head/tail +
+  mutex, list sort_by:'size', directory_tree happy + exclude_patterns,
+  read_media_file base64+content_type + max_bytes truncate + EISDIR.
+  All green on first run.
+
+### Out-of-scope (per backlog)
+
+- **P1 — MCP Roots protocol support.** Largest item; per backlog "should
+  be its own wave — don't bundle". Stays in `backlog/v0.8-filesystem-
+  mcp-parity.md` for a future wave.
+- **P3 — Audit log IO investigation.** Investigation rather than a fix;
+  output is a report at `audit/investigations/` plus a follow-up prompt
+  if action warranted. Stays in backlog.
+
 ## [Unreleased] — v0.7 wave 2c (architectural closure)
 
 Three architectural / methodological items consolidated while the
