@@ -271,10 +271,25 @@ async function fetchOnce(p: FetchOnceArgs): Promise<FetchOnceResult | Structured
     let redirectTo: string | undefined;
     let req: http.ClientRequest;
 
+    // P2.2: capture the abort listener so safeResolve can detach it on
+    // normal completion. The previous `{ once: true }` only fires after
+    // abort; a long-lived signal reused across many requests accumulates
+    // listeners + closes-over-state. 3/3 reviewer convergence.
+    const onAbort = (): void => {
+      safeResolve(buildError("ETIMEDOUT", "fetch_url aborted", {}));
+    };
+
     const safeResolve = (v: FetchOnceResult | StructuredError): void => {
       if (settled) return;
       settled = true;
       clearTimeout(deadlineTimer);
+      if (p.signal) {
+        try {
+          p.signal.removeEventListener("abort", onAbort);
+        } catch {
+          /* ignore */
+        }
+      }
       try {
         req.destroy();
       } catch {
@@ -300,13 +315,7 @@ async function fetchOnce(p: FetchOnceArgs): Promise<FetchOnceResult | Structured
         safeResolve(buildError("ETIMEDOUT", "fetch_url aborted", {}));
         return;
       }
-      p.signal.addEventListener(
-        "abort",
-        () => {
-          safeResolve(buildError("ETIMEDOUT", "fetch_url aborted", {}));
-        },
-        { once: true },
-      );
+      p.signal.addEventListener("abort", onAbort, { once: true });
     }
 
     const reqOpts: http.RequestOptions = {
