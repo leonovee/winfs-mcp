@@ -39,6 +39,8 @@ import { registerListProcessTool } from "./tools/system/list_process.js";
 import { registerStartProcessTool } from "./tools/system/start_process.js";
 import { registerInteractTool } from "./tools/system/interact.js";
 import { registerKillProcessTool } from "./tools/system/kill_process.js";
+import { registerDirectoryTreeTool } from "./tools/fs/directory_tree.js";
+import { registerReadMediaFileTool } from "./tools/file/read_media_file.js";
 
 /**
  * v0.7 wave 2c: `createServer` returns the McpServer plus the `ToolContext`
@@ -125,6 +127,12 @@ export function createServer(config: ResolvedConfig): CreatedServer {
   registerStartProcessTool(server, ctx);
   registerInteractTool(server, ctx);
   registerKillProcessTool(server, ctx);
+
+  // v0.8 wave: filesystem-MCP parity (+2 tools)
+  //   directory_tree: tree-shaped output companion to flat `list`
+  //   read_media_file: base64 binary reader companion to UTF-8-only `read`
+  registerDirectoryTreeTool(server, ctx);
+  registerReadMediaFileTool(server, ctx);
 
   return { server, ctx };
 }
