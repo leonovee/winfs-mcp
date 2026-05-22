@@ -488,13 +488,17 @@ export async function fetchUrlImpl(
     lastResult = hop;
     if (hop.redirectTo === undefined) {
       // Final response.
+      // P2.4: redact query string + userinfo from the user-visible final_url
+      // to match the audit-log behavior. Pre-fix the user-visible response
+      // leaked tokens passed via URL query (?token=...&apikey=...) even
+      // though the audit log redacted them.
       const value: FetchUrlResult = {
         status_code: hop.statusCode,
         content_type: hop.contentType,
         body: hop.body,
         bytes_received: hop.bytesReceived,
         truncated: hop.truncated,
-        final_url: currentUrl.toString(),
+        final_url: redactUrlForAudit(currentUrl.toString()),
         redirect_hops: hops,
       };
       auditByResult.set(value, {
