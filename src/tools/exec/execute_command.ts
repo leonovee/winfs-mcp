@@ -115,10 +115,52 @@ export async function executeCommandImpl(
     config.maxTimeoutMs,
   );
 
-  // PowerShell as dispatch shell. -NoProfile and -NonInteractive prevent
-  // user-profile config from affecting behavior and block interactive prompts.
+  // PowerShell as dispatch shell with v0.7.2 H2 hardening:
+  //   -NoProfile         no user profile (else PATH / encoding may shift)
+  //   -NonInteractive    no interactive prompts
+  //   -OutputFormat Text force plain text on stdout (default is Text for
+  //                      powershell.exe / pwsh but several historical contexts
+  //                      have leaked CLIXML; pin it explicitly).
+  //   -InputFormat None  PowerShell does not try to read stdin; safe even
+  //                      though stdio[0] is "ignore" — belt-and-suspenders
+  //                      against the documented "pipe-capture hangs PowerShell
+  //                      waiting on stdin" pattern.
+  //
+  // Composed command is wrapped with:
+  //   (a) `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;` —
+  //       forces UTF-8 on stdout regardless of the system OEM code page
+  //       (1252 / 437 / 850 / 1251 are common Windows defaults and produce
+  //       garbled non-ASCII output without this). Our utf8.ts strict decoder
+  //       rejects non-UTF-8 with EENCODING, so without this prefix any
+  //       non-ASCII output from a wrapped command would be lost.
+  //   (b) `; exit $LASTEXITCODE` — propagates the last external command's
+  //       exit code through the PowerShell wrapper. PowerShell already
+  //       propagates the exit code when the script's only statement IS an
+  //       external command; the explicit `exit` is defensive against future
+  //       composed-command shapes where additional PowerShell statements
+  //       run after the external command and `$LASTEXITCODE` would otherwise
+  //       be hidden behind a 0 exit from the wrapper.
+  //
+  // Bug #2 from handoff #1 (the historical "execute_command silent-output"
+  // operational note) — investigated in v0.7.1 and not reproducible at
+  // server source-code layer. The H2 hardening here closes the door on the
+  // suspected environmental causes (CLIXML leakage, stdin-deadlock, OEM
+  // code page corruption) as defense-in-depth.
   const bin = process.platform === "win32" ? "powershell.exe" : "pwsh";
-  const psArgs = ["-NoProfile", "-NonInteractive", "-Command", composed];
+  const wrappedComposed =
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " +
+    composed +
+    "; exit $LASTEXITCODE";
+  const psArgs = [
+    "-NoProfile",
+    "-NonInteractive",
+    "-OutputFormat",
+    "Text",
+    "-InputFormat",
+    "None",
+    "-Command",
+    wrappedComposed,
+  ];
 
   // Note: dispatched through the namespace object so test suites can
   // `vi.spyOn(execSafety, "spawnSubprocess").mockResolvedValue(...)`. A direct
