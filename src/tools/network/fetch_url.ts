@@ -77,7 +77,7 @@ export function getFetchUrlAuditExtras(value: FetchUrlResult): FetchAuditExtras 
   return auditByResult.get(value);
 }
 
-function redactUrlForAudit(rawUrl: string): string {
+export function redactUrlForAudit(rawUrl: string): string {
   try {
     const u = new URL(rawUrl);
     if (u.search) u.search = "?<redacted>";
@@ -89,7 +89,7 @@ function redactUrlForAudit(rawUrl: string): string {
   }
 }
 
-function isInternalIP(ip: string): boolean {
+export function isInternalIP(ip: string): boolean {
   if (net.isIPv4(ip)) {
     const parts = ip.split(".").map((p) => parseInt(p, 10));
     const [a, b, c, d] = parts as [number, number, number, number];
