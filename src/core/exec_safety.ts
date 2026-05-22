@@ -190,6 +190,12 @@ export interface SpawnSubprocessResult {
   spawnFailed: boolean;
   spawnErrorCode?: string;
   spawnErrorMessage?: string;
+  /** v0.7 pre-tag bug-fix wave (P1.3): true iff an external AbortSignal
+   *  caused the child to be killed. Lets callers distinguish a clean
+   *  no-output exit (exit_code: null, aborted: false) from an
+   *  external-cancellation (exit_code: null, aborted: true) — pre-fix
+   *  the two were indistinguishable. */
+  aborted: boolean;
 }
 
 /**
@@ -213,6 +219,11 @@ export async function spawnSubprocess(
     let truncatedStdout = false;
     let truncatedStderr = false;
     let timedOut = false;
+    let aborted = false;
+    /** P1.3: latched the moment an external abort fires, even if child.pid
+     *  is still undefined (spawn-in-progress). The `spawn` event handler
+     *  checks this and kills the child as soon as pid materialises. */
+    let abortRequested = false;
     let settled = false;
     let killedByCap = false;
     // v0.5.x bug surfaced by v0.6 smoke: when `spawn()` succeeds synchronously
@@ -248,6 +259,7 @@ export async function spawnSubprocess(
         spawnFailed: true,
         spawnErrorCode: e?.code,
         spawnErrorMessage: e?.message ?? String(err),
+        aborted: false,
       });
       return;
     }
@@ -299,6 +311,8 @@ export async function spawnSubprocess(
     deadlineTimer.unref?.();
 
     const onAbort = (): void => {
+      aborted = true;
+      abortRequested = true;
       try {
         child.kill("SIGTERM");
       } catch {
@@ -312,6 +326,23 @@ export async function spawnSubprocess(
       if (opts.signal.aborted) onAbort();
       else opts.signal.addEventListener("abort", onAbort, { once: true });
     }
+
+    // P1.3 race fix: if abort fires BEFORE the child's pid is assigned, the
+    // initial kill attempt is a no-op (kill on undefined pid). The `spawn`
+    // event fires once the OS has actually launched the process and pid is
+    // valid — check abortRequested then and finish the kill.
+    child.on("spawn", () => {
+      if (abortRequested && !settled) {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          /* ignore */
+        }
+        setTimeout(() => {
+          if (!settled) killTree();
+        }, 2000).unref();
+      }
+    });
 
     child.stdout.on("data", (chunk: Buffer) => {
       if (stdoutBytes + chunk.length <= opts.maxOutputBytes) {
@@ -358,6 +389,7 @@ export async function spawnSubprocess(
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
         exitCode,
         timedOut,
+        aborted,
         truncatedStdout,
         truncatedStderr,
         durationMs: Date.now() - started,
