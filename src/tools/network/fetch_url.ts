@@ -141,7 +141,10 @@ export function isProtocolDowngrade(from: URL, to: URL): boolean {
 
 function validateHostWhitelist(url: URL, config: ResolvedConfig): StructuredError | undefined {
   const host = url.hostname.toLowerCase();
-  const allowed = config.allowedUrlHosts.map((h) => h.toLowerCase());
+  // P2.8: trim AND lowercase. Operator misconfiguration (trailing/leading
+  // whitespace in config) would otherwise silently reject every request to
+  // the affected host. 3/3 reviewer convergence (Codex, Kimi, DeepSeek).
+  const allowed = config.allowedUrlHosts.map((h) => h.trim().toLowerCase());
   if (!allowed.includes(host)) {
     return buildError("EHOSTNOTALLOWED", "host is not in allowedUrlHosts", {
       details: { host, allowed_count: allowed.length },
