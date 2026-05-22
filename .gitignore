@@ -11,6 +11,14 @@ coverage/
 # Local working config with real paths (not the template)
 configs/local.json
 
+# Secrets — never commit. Reviewer infrastructure copies API keys from
+# C:\Users\User\Desktop\ai\ai-judge\.env into winfs\.env (D2 of v0.8.0
+# reviewer-restore prompt). The file is also generally any local-only
+# env-var bag.
+.env
+.env.local
+.env.*.local
+
 # Smoke test artifacts (Inspector probes — recreatable, harmless if absent)
 test-cyrillic.txt
 desktop-test.txt
