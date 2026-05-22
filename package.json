@@ -1,6 +1,6 @@
 {
   "name": "winfs-mcp",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "MCP server for Windows 10/11 filesystem with hard-bounded timeouts, allowed-roots, atomic writes and UTF-8 invariants.",
   "type": "module",
   "main": "dist/index.js",
