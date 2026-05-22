@@ -7,7 +7,7 @@
 ### Владимир (Vladimir Leonov, `leonovee` на GitHub)
 
 — заказчик и оператор машины (Windows, Tallinn);
-— запускает Claude Code в VS Code из папки `C:\Users\Expert\Desktop\AI\tools\winfs\`;
+— запускает Claude Code в VS Code из папки `C:\Users\User\Desktop\ai\tools\winfs\` (на текущей машине; на старой машине было `C:\Users\Expert\Desktop\AI\tools\winfs\`);
 — даёт Claude Code название промпта (например: «выполни `prompts/cc-prompt-mcp-winfs-v0.6.md`»);
 — копирует вывод Claude Code в чат с Claude для разбора;
 — корректирует план, если что-то не так.
@@ -63,7 +63,7 @@
 
 ## Технические особенности проекта
 
-— основная папка: `C:\Users\Expert\Desktop\AI\tools\winfs\`;
+— основная папка: `C:\Users\User\Desktop\ai\tools\winfs\` (lowercase `ai`, `tools`);
 — remote: `https://github.com/leonovee/winfs-mcp`;
 — git на Windows вызывать через абсолютный путь: `& "C:\Program Files\Git\cmd\git.exe"`;
 — у `winfs:execute_command` известный баг (P2): при вызове `& "git.exe" ...` stdout/stderr пустые, но команда выполняется. Состояние проверять через файлы (`.git/refs/heads/main`, `git status`-файл через `Start-Process -RedirectStandardOutput`).
