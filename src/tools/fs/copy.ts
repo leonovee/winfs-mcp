@@ -233,8 +233,12 @@ Errors: EPERM_ROOT (either side), ENOENT (src), EEXIST (overwrite=false + dst ex
       inputSchema: InputShape,
       outputSchema: OutputShape,
       annotations: {
+        // v0.8: destructiveHint is true (matches move): copy with
+        // overwrite:true may overwrite the destination. Clients should
+        // confirm before invoking unless they explicitly pass
+        // overwrite:false (the default; safer for blind invocations).
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: false,
         openWorldHint: false,
       },
