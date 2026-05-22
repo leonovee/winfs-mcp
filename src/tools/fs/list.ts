@@ -22,6 +22,12 @@ const InputShape = {
     .string()
     .optional()
     .describe('Optional simple glob (e.g., "*.md"). Matches against entry basename only.'),
+  sort_by: z
+    .union([z.literal("name"), z.literal("size"), z.literal("mtime")])
+    .optional()
+    .describe(
+      "Sort entries by: 'name' (default of the underlying walk — alphabetical per directory), 'size' (descending), or 'mtime' (newest first). When omitted, entries are returned in directory-walk order.",
+    ),
 } as const;
 
 export const InputSchema = z.object(InputShape).strict();
@@ -144,6 +150,20 @@ export async function listImpl(args: Input, config: ResolvedConfig): Promise<Res
   const entries: ListEntry[] = [];
   await walk(realPath, 1, args.max_depth, glob, entries);
 
+  // v0.8: optional sort. 'name' ascending (case-insensitive, locale-default),
+  // 'size' descending (largest first — storage-cleanup use case), 'mtime'
+  // descending (newest first — recent-activity use case). When sort_by is
+  // undefined, return in directory-walk order (the prior contract).
+  if (args.sort_by === "name") {
+    entries.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "accent" }),
+    );
+  } else if (args.sort_by === "size") {
+    entries.sort((a, b) => b.size - a.size);
+  } else if (args.sort_by === "mtime") {
+    entries.sort((a, b) => (a.mtime < b.mtime ? 1 : a.mtime > b.mtime ? -1 : 0));
+  }
+
   return ok({ entries, total: entries.length });
 }
 
@@ -159,6 +179,9 @@ Args:
   - path (string): Absolute directory path inside allowedRoots
   - max_depth (1..5, default 1): recursion depth
   - glob (string, optional): basename glob ("*.md"). \`*\` and \`?\` and \`[...]\` are supported.
+  - sort_by ('name' | 'size' | 'mtime', optional): sort the returned entries.
+    'name' ascending (case-insensitive), 'size' descending (largest first),
+    'mtime' descending (newest first). Omit for directory-walk order.
 
 Returns: { entries: [{name, path, size, mtime, is_dir, depth}], total }
 Errors: EPERM_ROOT, ENOENT, ENOTDIR, ETIMEDOUT.`,
