@@ -126,6 +126,19 @@ function validateProtocol(url: URL): StructuredError | undefined {
   return undefined;
 }
 
+/**
+ * True when a redirect hop would step DOWN from https: to http: — the
+ * canonical SSRF-downgrade attack against whitelisted hosts whose owners
+ * configure a misbehaving HTTPS→HTTP rewrite. Used in the redirect loop
+ * to reject such hops with EHOSTNOTALLOWED + details.reason="protocol_downgrade".
+ *
+ * The reverse direction (http → https) is NOT classified as a downgrade —
+ * upgrading the channel mid-redirect is benign.
+ */
+export function isProtocolDowngrade(from: URL, to: URL): boolean {
+  return from.protocol === "https:" && to.protocol === "http:";
+}
+
 function validateHostWhitelist(url: URL, config: ResolvedConfig): StructuredError | undefined {
   const host = url.hostname.toLowerCase();
   const allowed = config.allowedUrlHosts.map((h) => h.toLowerCase());
@@ -467,6 +480,22 @@ export async function fetchUrlImpl(
     } catch {
       return buildError("EIO", "redirect target is not a valid URL", {
         details: { location: hop.redirectTo.slice(0, 256) },
+      });
+    }
+    // Block HTTPS → HTTP downgrade on the redirect hop. validateProtocol on
+    // the next iteration accepts both schemes, so without this check a
+    // whitelisted server's `Location: http://...` would silently land the
+    // request on plain HTTP. http → https remains allowed (channel upgrade).
+    if (isProtocolDowngrade(currentUrl, nextUrl)) {
+      return buildError("EHOSTNOTALLOWED", "redirect would downgrade https → http", {
+        details: {
+          from: currentUrl.protocol,
+          to: nextUrl.protocol,
+          from_host: currentUrl.hostname,
+          to_host: nextUrl.hostname,
+          reason: "protocol_downgrade",
+        },
+        hint: "Redirect target uses a less-secure protocol than the originating request; refusing the hop.",
       });
     }
     hops++;
