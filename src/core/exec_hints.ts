@@ -24,11 +24,18 @@ export interface HintEntry {
 export const HINT_REGISTRY: readonly HintEntry[] = [
   {
     marker: "Cannot run a document in the middle of a pipeline",
+    // P2.6 (v0.7 pre-tag bug-fix): the prior hint suggested "try cmd",
+    // but execute_command runs PowerShell only — `cmd` is not an available
+    // dispatch route from this tool. Rewrite to actionable advice that
+    // works inside this server's contract.
     hint:
-      "PowerShell refused to execute the target binary as a process. This typically " +
-      "means the binary is missing from PATHEXT or has an unusual file association " +
-      "registered. Try invoking it via a different shell (cmd) or with the full path, " +
-      "or use a passthrough tool if available.",
+      "PowerShell refused to execute a file via the call operator (`&`). The file's " +
+      "extension is registered with a non-PowerShell-runnable handler (e.g. a document " +
+      "extension). Inside this tool the workable paths are: (1) invoke the binary " +
+      "directly without `&` — `C:\\full\\path\\to\\binary.exe args`; (2) wrap in " +
+      "`Start-Process -FilePath ... -Wait` if you need the side-effect; (3) for " +
+      "ssh.exe specifically, use the `ssh_exec` tool which spawns ssh outside the " +
+      "PowerShell pipeline.",
   },
 ];
 

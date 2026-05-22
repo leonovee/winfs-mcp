@@ -32,6 +32,7 @@ describe("tools/exec/execute_command — hints registry (v0.7 wave 2a)", () => {
       stderr,
       exitCode: 1,
       timedOut: false,
+      aborted: false,
       truncatedStdout: false,
       truncatedStderr: false,
       durationMs: 5,
@@ -52,7 +53,11 @@ describe("tools/exec/execute_command — hints registry (v0.7 wave 2a)", () => {
     expect(res.value.hints).toBeDefined();
     expect(res.value.hints).toHaveLength(1);
     expect(res.value.hints![0]).toMatch(/PowerShell/i);
-    expect(res.value.hints![0]).toMatch(/PATHEXT|cmd|full path/i);
+    // Hint surfaces an actionable in-this-tool path (direct binary call,
+    // Start-Process wrapper, or ssh_exec for ssh specifically). v0.7
+    // pre-tag rewrite removed the prior "try cmd" advice (cmd is not
+    // an available dispatch route from this tool).
+    expect(res.value.hints![0]).toMatch(/Start-Process|ssh_exec|invoke the binary directly/i);
     // Raw stderr is preserved verbatim — hints do not mutate it.
     expect(res.value.stderr).toMatch(/Cannot run a document in the middle of a pipeline/);
   });
