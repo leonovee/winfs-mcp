@@ -104,13 +104,29 @@ export function isInternalIP(ip: string): boolean {
   if (net.isIPv6(ip)) {
     const lower = ip.toLowerCase();
     if (lower === "::1" || lower === "0:0:0:0:0:0:0:1") return true;
-    if (lower.startsWith("fe80")) return true; // fe80::/10 link-local
+    // P1.3: fe80::/10 link-local covers fe80:: through febf::, not just
+    // addresses literally starting with "fe80". Use a bitmask on the first
+    // 16-bit word to catch the full /10 prefix.
+    const firstWord = parseInt(lower.split(":")[0] ?? "0", 16);
+    if (!Number.isNaN(firstWord) && (firstWord & 0xffc0) === 0xfe80) return true;
     if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // fc00::/7 ULA
-    // IPv4-mapped IPv6 (::ffff:a.b.c.d)
+    // IPv4-mapped IPv6 (::ffff:a.b.c.d OR ::ffff:hhhh:hhhh)
     const m = lower.match(/^::ffff:([0-9a-f.:]+)$/);
     if (m) {
       const inner = m[1]!;
       if (net.isIPv4(inner)) return isInternalIP(inner);
+      // P1.4: the inner part may be in hex-colon form (e.g. "c0a8:0101" =
+      // 192.168.1.1). net.isIPv4 returns false for that, so the dotted-only
+      // path missed it. Convert hex-colon to dotted, then re-check.
+      const hexColon = inner.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+      if (hexColon) {
+        const hi = parseInt(hexColon[1]!, 16);
+        const lo = parseInt(hexColon[2]!, 16);
+        if (!Number.isNaN(hi) && !Number.isNaN(lo)) {
+          const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+          return isInternalIP(dotted);
+        }
+      }
     }
     return false;
   }
