@@ -3,6 +3,151 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased] — v0.7 pre-tag bug-fix wave
+
+Bug fixes and defense-in-depth hardening from the v0.7 pre-tag external
+review wave (artifacts at `audit/external_reviews/v0.7-pre-tag/`). 13
+fix commits + 1 invariant-test commit + 1 atomicWriteFile precursor.
+No version bump — `[Unreleased]` continues.
+
+### Bug #1 investigation outcome
+
+The reported "EPERM_ROOT then 4-minute hang" did NOT localize to winfs
+server code. In-process regression tests at
+`tests/unit/exec/bug1_eperm_root_hang.test.ts` confirm subsequent tool
+calls return within ~10-500 ms after an EPERM_ROOT error. The hang is
+in the MCP transport layer between Claude Desktop and the winfs server
+— same pattern as the existing CLAUDE.md operational note. Tests stay
+in the suite as regression cover for the in-process invariant.
+
+### Fixed — fetch_url
+
+- **P1.1 — HTTPS→HTTP redirect downgrade blocked.** 3/3 reviewer
+  convergence. New exported helper `isProtocolDowngrade(from, to)`;
+  redirect loop hits `EHOSTNOTALLOWED` with `details.reason:
+  "protocol_downgrade"` when the next hop would step from https: to
+  http:. Reuses existing error code; no spec contract break.
+- **P1.2 — explicit `rejectUnauthorized: true` on HTTPS options.**
+  Defense-in-depth: Node's default is `true`, but pinning it explicitly
+  prevents a runtime override (test setup, dependency side-effect,
+  https.globalAgent reassignment) from silently disabling cert
+  validation.
+- **P1.3 — `isInternalIP` recognises full fe80::/10 range.**
+  Pre-fix `lower.startsWith("fe80")` only caught addresses literally
+  starting `fe80`; fe90::, fea0::, febc::, febf:: were classified as
+  external. Fix: bitmask the first 16-bit word: `(firstWord & 0xffc0)
+  === 0xfe80`.
+- **P1.4 — `isInternalIP` recognises IPv4-mapped IPv6 hex-colon
+  form.** Pre-fix `::ffff:c0a8:0101` (= ::ffff:192.168.1.1) was
+  classified as external because the inner string `c0a8:0101` failed
+  `net.isIPv4`. Fix: when the inner is not dotted-decimal, parse as
+  two hex groups and convert to dotted-decimal, then recurse.
+- **P2.2 — AbortSignal listener removed on `safeResolve`.**
+  3/3 reviewer convergence. Long-lived signals reused across many
+  requests no longer accumulate one listener per call.
+- **P2.4 — `final_url` query string redacted in response.** Audit log
+  already redacted via `redactUrlForAudit`; the user-visible
+  response now applies the same redaction. Tokens/keys passed in
+  URL query strings no longer leak through the tool's return value.
+- **P2.8 — `allowedUrlHosts` entries trimmed before lookup.**
+  3/3 convergence. Operator misconfiguration (leading/trailing
+  whitespace) no longer silently rejects all requests to the host.
+
+### Fixed — exec_safety / execute_command / exec_hints
+
+- **P1.1 — `-EncodedCommand` blocklist bypass closed.** Pre-fix
+  `powershell -EncodedCommand <b64>` smuggled base64-encoded payloads
+  past every literal-pattern blocklist entry. New explicit-alternation
+  pattern catches every PowerShell-accepted prefix from `-e` through
+  `-encodedcommand`. Phase 0 verify-first test confirmed bypass.
+- **P1.2 — `rm` short-flag blocklist bypass closed.** Pre-fix
+  `rm -r C:\foo`, `rm -R`, and `rm -Recurse C:\foo` all passed
+  (pattern required combined `-rf`). Two new patterns added:
+  `rm\s.*-[rR]\b` and `rm\s.*-Recurse\b`. Phase 0 verify-first test
+  confirmed bypass.
+- **execute_command P1.3 — `aborted: boolean` field + pid-undefined
+  race.** SpawnSubprocessResult gains `aborted: boolean` so callers
+  can distinguish caller-initiated cancellation from a clean
+  no-output exit (both previously surfaced exit_code: null). Narrow
+  pid-undefined race fixed via a latch + `child.on("spawn")` handler.
+- **exec_hints P2.6 — document-in-pipeline hint rewritten.** The
+  prior "try cmd" advice was inapplicable from inside the tool
+  (execute_command runs PowerShell only). New hint surfaces three
+  in-this-tool workable paths: direct binary call, Start-Process
+  wrapper, or `ssh_exec` for ssh specifically.
+
+### Fixed — edit_file
+
+- **P1.1 — `AbortSignal` forwarded through editFileImpl.** Pre-fix
+  the signal passed by `runTool` was silently dropped; `fs.readFile`
+  and `atomicWriteFile` ran uninterruptibly past the wall-clock
+  deadline. Now threaded through. Depends on the Phase 1
+  atomicWriteFile signal-acceptance precursor.
+- **P2.1 — `EUNIQUE` absence hint conditional on `i > 0`.** Pre-fix
+  the hint always said "An earlier edit may have removed the target."
+  For `edit[0]` this is misleading — no prior edit ran. Hint now
+  conditional; first-edit absence suggests checking spelling/whitespace.
+
+### Fixed — grep
+
+- **P1.1 — inner-deadline race when `timeout_ms == config.maxTimeoutMs`
+  resolved.** Pre-fix `outerDeadline = min(innerDeadline + buffer,
+  maxTimeoutMs)` collapsed both deadlines to the same instant when
+  the caller requested maxTimeoutMs. Now: outer = requested; inner
+  = max(1, outer - buffer). Inner always fires ≥ buffer before outer.
+- **P1.3 — defense-in-depth guard for negative `context_lines`.**
+  Zod rejects at the registered-tool boundary; direct grepImpl
+  callers (unit tests, future internal tools) now hit EINVAL too.
+- **P2.5 — defensive `re.lastIndex = 0` reset.** No-op today; future-
+  proofs against a `g`/`y` flag pass-through change that would
+  silently cause false negatives.
+- **P2.8 — defensive `compileGlob.base` absolute non-empty assert.**
+  Second layer behind compileGlob's existing "pattern must be
+  absolute" throw; catches any future compileGlob change that
+  returns an empty/relative base instead of throwing.
+
+### Infrastructure
+
+- **`atomicWriteFile` and `atomicAppend` accept optional `AbortSignal`.**
+  Threaded through `fs.open` / `handle.writeFile` / `fs.readFile`
+  options. Three abort points handled: pre-aborted (no temp file
+  created), abort during writeFile/sync (best-effort temp cleanup),
+  abort between close and rename (observed via signal.aborted check
+  before rename, unlinks temp). Optional / default undefined; every
+  existing caller preserved.
+- **`SpawnSubprocessResult.aborted: boolean`** added (non-optional).
+  All existing producers updated to set `aborted: false`.
+- **New exported helpers** for verify-first testing and reuse:
+  `fetch_url.ts` — `isInternalIP`, `redactUrlForAudit`,
+  `isProtocolDowngrade`. Pure functions, no API surface change for
+  the registered tool.
+
+### Invalidated findings
+
+- **grep P1.2 + P2.7 (ReDoS within line).** V8 returned within ~10 ms
+  on the canonical bait pattern `(a+)+$` against a 10 KB 'a' line —
+  well within deadline. V8 has hardened common ReDoS bait at the
+  regex-compiler level on this Node version. No `LINE_SCAN_CAP`
+  introduced; the verify-first test stays as a pin (any future
+  regression re-opens the discussion). Details:
+  `audit/external_reviews/v0.7-pre-tag/_invalidated_findings.md`.
+
+### Tests
+
+- 372 → 416 passing in this wave's commits (+44 new). Pre-existing
+  10 Windows-flaky tests in `tests/unit/process/*` excluded from
+  this wave per the prompt; reproduce on `da1eb2a` baseline and are
+  unrelated.
+
+### Spec amendment §AA
+
+`docs/design/mcp-winfs-spec.md` gains a §AA "v0.7 pre-tag bug-fix
+wave" entry documenting the new fetch_url redirect downgrade
+contract, the SpawnSubprocessResult `aborted` field, and the
+atomicWriteFile signal contract. No new error codes were added —
+EHOSTNOTALLOWED is reused for redirect downgrade with
+`details.reason: "protocol_downgrade"` for caller discrimination.
+
 ## [Unreleased] — v0.7 tails (docs + cleanup)
 
 Pre-review-wave sweep. Five small items that accumulated across waves

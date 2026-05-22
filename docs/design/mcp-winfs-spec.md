@@ -1403,3 +1403,89 @@ Bounded by four config fields, all added to `CONFIG_SCHEMA`:
 **Invariant #37 — shutdown drains the registry within 10 s.** SIGINT/SIGTERM handlers in `src/index.ts` call `registry.shutdown()` which SIGKILLs all running children and awaits their `close` event with a 10 s hard deadline. Children never leak past server process exit on the happy path.
 
 **Invariant #38 — every settled session is reapable.** A session whose status flips out of `running` MUST have its child either fully closed or about to close. The `deadlineFired` flag ensures the timed_out path lets the natural close event drive settlement, rather than settling first and leaving a still-alive process attached.
+
+---
+
+### 2026-05-22 — v0.7 pre-tag bug-fix wave: §AA
+
+**Motivation.** The v0.7 pre-tag external review wave (16-cell × 4-surface, artifacts under `audit/external_reviews/v0.7-pre-tag/`) surfaced 13 P1 + ~25 P2 findings. The pre-tag bug-fix wave applied the security-relevant + high-confidence subset, deferred the rest to v0.7.x, and invalidated grep P1.2/P2.7 (line ReDoS) after V8 verify-first showed the bait pattern returns in ~10 ms.
+
+The wave's findings cluster around one systemic weakness: **async cleanup on error paths**. Three of the largest fixes (fetch_url P2.2, execute_command P1.3, edit_file P1.1) all addressed AbortSignal lifetime issues — listeners not removed, abort race during pid materialisation, signal not forwarded through the tool's I/O calls. The atomicWriteFile refactor was a Phase 1 precursor that made the edit_file fix possible without leaking orphan temp files. The pattern is captured as invariant #39 below.
+
+**§AA.1. fetch_url — redirect protocol downgrade refused.**
+
+`fetchUrlImpl`'s redirect loop reuses `validateProtocol` per hop, but that helper accepts both `http:` and `https:`. Pre-fix a 302 from `https://allowed/sso` to `http://allowed/sso` was silently followed — MITM-observable, and a path to probe HTTP-only internal services through a whitelisted CDN/SSO host. The fix adds an `isProtocolDowngrade(from, to)` helper called before advancing `currentUrl`; a downgrade returns `EHOSTNOTALLOWED` with `details.reason: "protocol_downgrade"`, `details.{from, to, from_host, to_host}` for caller discrimination.
+
+Error code reuses `EHOSTNOTALLOWED` (this hop's URL is not allowed) rather than introducing `EPROTOCOL_DOWNGRADE`. Decision rationale: a new code requires audit-surface + caller-mapping changes; the `details.reason` field gives equivalent discrimination without expanding the error vocabulary.
+
+**§AA.2. fetch_url — SSRF guard recognises full fe80::/10 and IPv4-mapped IPv6 hex-colon form.**
+
+`isInternalIP` previously used `lower.startsWith("fe80")` for link-local, which only covered the 16-bit literal prefix. The fe80::/10 range spans `fe80::` through `febf::` (10-bit prefix). Fix: bitmask the first word: `(parseInt(word, 16) & 0xffc0) === 0xfe80`.
+
+For IPv4-mapped IPv6, the inner segment after `::ffff:` was only checked via `net.isIPv4` (dotted-decimal form). The hex-colon form `c0a8:0101` (= 192.168.1.1) returned false from `net.isIPv4`, allowing SSRF to private space through `::ffff:c0a8:0101`. Fix: when the inner segment is two ≤4-char hex groups, convert to dotted-decimal and recurse.
+
+**§AA.3. fetch_url — final_url query redaction matches audit-log behaviour.**
+
+Pre-fix `final_url: currentUrl.toString()` returned the full URL including query string to the caller. Audit log already redacted via `redactUrlForAudit`. The fix applies the same redaction to the response value; user-visible and audit-visible URLs now match.
+
+**§AA.4. fetch_url — explicit `rejectUnauthorized: true`.**
+
+Defense-in-depth. Node's default for HTTPS request options is `true`, so no behavior change today. The explicit assignment prevents a runtime override (test environment, dependency side-effect, `https.globalAgent` reassignment) from silently disabling certificate validation for this codepath.
+
+**§AA.5. fetch_url — AbortSignal listener cleanup on safeResolve.**
+
+The `addEventListener("abort", ..., { once: true })` registration was never explicitly removed on normal completion — `{ once: true }` only auto-removes after the abort event itself fires. Long-lived signals reused across many requests accumulated one listener per call (and per redirect hop). Fix: `safeResolve` calls `removeEventListener` before resolving.
+
+**§AA.6. fetch_url — allowedUrlHosts entries trimmed.**
+
+`validateHostWhitelist` now applies `.trim()` before lowercase comparison. Operator misconfiguration (leading/trailing whitespace in config) no longer silently rejects all requests to that host.
+
+**§AA.7. exec_safety — blocklist closes -EncodedCommand + rm short-flag bypasses.**
+
+Two patterns added to `DEFAULT_EXEC_BLOCKLIST`:
+- `(?:^|\\s)-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\\s` — catches every PowerShell-accepted prefix of `-EncodedCommand`, preventing base64-payload smuggling past destructive-verb patterns.
+- `rm\\s.*-[rR]\\b` and `rm\\s.*-Recurse\\b` — catches PowerShell's `Remove-Item` aliases with short / long recursive flags. Prior pattern required combined `-rf`.
+
+Both bypasses verified by Phase 0 verify-first tests before the patch landed; tests flipped from failing to passing on application.
+
+**§AA.8. exec_safety — SpawnSubprocessResult gains `aborted: boolean`.**
+
+Pre-fix a caller-initiated abort produced `exit_code: null` indistinguishable from a clean no-output exit. The new field is true iff the `onAbort` handler ran (caller-initiated cancellation). False for every other settle path. A narrow pid-undefined race (abort fires before child.pid materialises) is closed by an `abortRequested` latch + `child.on("spawn", ...)` handler.
+
+**§AA.9. atomicWriteFile signal contract (Phase 1 precursor).**
+
+`atomicWriteFile(destPath, data, options?)` now accepts `options.signal?: AbortSignal`. Threaded through `fs.open` / `handle.writeFile` / `fs.unlink` / `fs.rename` via the options bag (Node 18+). Three abort points handled:
+
+1. **Pre-aborted signal before fs.open** — throws an abort error, no temp file ever created.
+2. **Abort during writeFile/sync** — best-effort `handle.close` + `fs.unlink(tmpPath)` before re-throwing the writeFile error.
+3. **Abort between close and rename** — explicit `signal.aborted` check before rename; unlinks temp and throws abort error rather than promoting a half-aborted write to the destination.
+
+Optional / default undefined. Every existing caller — `write`, `append`, `edit_file`, `write_json` — preserved without modification (only `edit_file` chose to thread the signal in this wave; the rest remain candidates for v0.7.x).
+
+**§AA.10. edit_file signal forwarding.**
+
+`editFileImpl(args, config, signal?)` signature gains the optional signal. `fs.readFile` and `atomicWriteFile` receive `{ signal }`. The wall-clock deadline in `withTimeout` previously surfaced ETIMEDOUT correctly (via Promise.race) but left orphan I/O running past the deadline; now the underlying operations cooperate with the abort.
+
+**§AA.11. grep deadline-race fix.**
+
+Pre-fix `outerDeadline = Math.min(innerDeadline + OUTER_TIMEOUT_BUFFER_MS, maxTimeoutMs)`. When the caller requested `timeout_ms === maxTimeoutMs`, both deadlines collapsed to the same wall-clock instant; V8 timer ordering is non-deterministic at equal expiry, so the outer wrapper could win, returning ETIMEDOUT instead of grep's partial-result path. Fix: invert the order. Outer = `resolveTimeoutMs(requested, default, max)`; inner = `max(1, outer - OUTER_TIMEOUT_BUFFER_MS)`. Inner always fires ≥ buffer before outer regardless of caller input.
+
+**§AA.12. grep defense-in-depth guards.**
+
+- Negative `context_lines` in direct `grepImpl` callers (bypassing Zod) → `EINVAL` early.
+- Wildcards-only glob (e.g. `**/*.ts`) with empty/non-absolute `compiled.base` → `EINVAL` (compileGlob already throws; new assert is a second layer).
+- `re.lastIndex = 0` reset at the top of each line iteration. No-op today (no `g`/`y` flags); future-proofs the no-flag invariant.
+
+**§AA.13. exec_hints — document-in-pipeline hint rewritten.**
+
+The prior hint advised "try a different shell (cmd)", but execute_command runs PowerShell only — cmd is not an available dispatch route. New hint surfaces three in-this-tool workable paths: direct binary invocation without `&`, `Start-Process -FilePath ... -Wait`, or `ssh_exec` for the common case of ssh.exe.
+
+**Invariant #39 — error paths must NOT leak async resources past the deadline.** AbortSignal listeners registered for cleanup MUST be removed in the settle path, not merely registered with `{ once: true }`. Process spawns owned by a tool MUST surface caller-cancellation distinguishably (`aborted` flag, not just `exit_code: null`). I/O operations downstream of `runTool` MUST forward the wrapper's signal so the wall-clock deadline actually aborts in-flight work, not merely returns ETIMEDOUT while orphan I/O continues. Closes the systemic gap surfaced by the v0.7 pre-tag review wave.
+
+**Invariant #40 — defense-in-depth on validator boundaries.** Each tool's `Impl` function MUST re-assert inputs that the registered-tool Zod schema validates, when those inputs are also used by structurally adjacent code paths (recursion, walk callbacks, future internal callers). The Zod check is the public boundary; the impl-level assert is the internal contract. Surfaced this wave by grep's negative-context_lines + wildcards-only-glob defense-in-depth.
+
+**Bug #1 outcome (NOT a winfs server-side bug).** The empirically observed "EPERM_ROOT then 4-minute hang" reported in the parallel ai-judge chat does not reproduce at the in-process winfs impl layer (regression tests at `tests/unit/exec/bug1_eperm_root_hang.test.ts`). The hang localises to the MCP transport between Claude Desktop and the winfs server — same pattern as the existing CLAUDE.md operational note. Tests stay in the suite as regression cover for the in-process invariant. Spec: no change required; ops doc already covers the transport workaround.
+
+**Invalidated finding — grep P1.2 / P2.7 (line ReDoS).** Phase 0 verify-first test showed V8 returns within ~10 ms on the canonical bait pattern `(a+)+$` against a 10 KB 'a' line, well within deadline. No `LINE_SCAN_CAP` introduced. Verify-first test stays as a pin (any future regression re-opens the discussion). Detailed in `audit/external_reviews/v0.7-pre-tag/_invalidated_findings.md`.
+
+**No new error codes.** Spec invariant set grew from #38 to #40 (+2). Tool inventory unchanged at 37. CHANGELOG `[Unreleased]` continues; no version bump from this wave.
