@@ -1402,7 +1402,7 @@ Bounded by four config fields, all added to `CONFIG_SCHEMA`:
 
 **Invariant #37 — shutdown drains the registry within 10 s.** SIGINT/SIGTERM handlers in `src/index.ts` call `registry.shutdown()` which SIGKILLs all running children and awaits their `close` event with a 10 s hard deadline. Children never leak past server process exit on the happy path.
 
-**Invariant #38 — every settled session is reapable.** A session whose status flips out of `running` MUST have its child either fully closed or about to close. The `deadlineFired` flag ensures the timed_out path lets the natural close event drive settlement, rather than settling first and leaving a still-alive process attached.
+**Invariant #38 — every settled session is reapable.** A session whose status flips out of `running` MUST have its child either fully closed or about to close. The `deadlineFired` flag ensures the timed_out path lets the natural close event drive settlement, rather than settling first and leaving a still-alive process attached. **Generalised to all future stateful subsystems by invariant #41 (wave 2c).**
 
 ---
 
@@ -1489,3 +1489,57 @@ The prior hint advised "try a different shell (cmd)", but execute_command runs P
 **Invalidated finding — grep P1.2 / P2.7 (line ReDoS).** Phase 0 verify-first test showed V8 returns within ~10 ms on the canonical bait pattern `(a+)+$` against a 10 KB 'a' line, well within deadline. No `LINE_SCAN_CAP` introduced. Verify-first test stays as a pin (any future regression re-opens the discussion). Detailed in `audit/external_reviews/v0.7-pre-tag/_invalidated_findings.md`.
 
 **No new error codes.** Spec invariant set grew from #38 to #40 (+2). Tool inventory unchanged at 37. CHANGELOG `[Unreleased]` continues; no version bump from this wave.
+
+---
+
+### 2026-05-22 — v0.7 wave 2c: architectural closure (§AB)
+
+**Motivation.** Three architectural / methodological items accumulated during the v0.7 sub-waves that should land while the codebase is fresh and no downstream consumer depends on internal signatures. None are user-facing bugs.
+
+**§AB.1. Invariant #41 — stateful sessions settle by close-event only (generalises #38).**
+
+Wave 2b introduced invariant #38 ("every settled session is reapable") for the ProcessRegistry case: a session whose status flips out of `running` MUST have its child either fully closed or about to close. The `deadlineFired` flag pattern (timed_out is recorded, but the natural close event drives the actual settle) was the concrete fix.
+
+Invariant #41 generalises that ProcessRegistry-specific rule to **every future stateful subsystem** (file watcher, network connection, persistent shell, job queue, etc.):
+
+> Subsystems that manage long-lived OS resources MUST NOT transition session state to a settled value (`exited`, `killed`, `timed_out`, `failed`, `closed`, …) based on intent-to-terminate alone — deadline fires, kill signal sent, cleanup requested, abort received. The final state transition MUST be driven by the actual close-event from the underlying resource. Intent-to-terminate may set per-session flags (`deadlineFired`, `killRequested`, `abortRequested`, etc.) which influence the eventual settle-state classification, but the settle itself happens only when the resource confirms it has released.
+
+**Rationale.** A session marked `settled` while the OS resource is still live causes cleanup races. On Windows the most visible symptom is `EBUSY` on `rmdir` during test cleanup, because the temp directory is still held open by the not-actually-dead subprocess. Wave 2b's ProcessRegistry surfaced this race; the `deadlineFired` flag + close-event-driven settle is the reference pattern.
+
+**Applies to.** ProcessRegistry in `src/core/process_registry.ts` (already conformant via the wave 2b fix that earned invariant #38). All future stateful subsystems by default. Pair with invariant #36 (ProcessRegistry is the ONLY long-lived shared mutable state today) and invariant #39 (error paths must not leak async resources past the deadline).
+
+**§AB.2. ToolContext: uniform register*Tool signature.**
+
+Pre-wave: every `register<Name>Tool` took `(server, config, audit, registry?)` positional arguments, with `registry` added in wave 2b. Each future stateful subsystem would add a positional arg and break every registration site.
+
+Post-wave: a single `ToolContext` interface in `src/core/tool_context.ts` consolidates per-server state. Every `register*Tool` accepts `(server, ctx: ToolContext)`. Extending the context (next stateful subsystem) adds a field to the interface, not a positional parameter.
+
+```typescript
+export interface ToolContext {
+  readonly config: ResolvedConfig;
+  readonly registry: ProcessRegistry;
+}
+
+export function createToolContext(parts: {
+  config: ResolvedConfig;
+  registry: ProcessRegistry;
+}): ToolContext { /* ... */ }
+```
+
+(Audit is module-level via `appendAudit(config, record)` and stays that way — passing it through context would change a stable single-module surface for no benefit.)
+
+`createServer` constructs the context once and passes it to every register call; the return type changes from `{ server, registry }` to `{ server, ctx }`. `src/index.ts` reaches the registry as `ctx.registry`.
+
+**Rule.** When introducing a new stateful subsystem:
+1. Add the field to `ToolContext` and to `createToolContext`'s `parts` parameter.
+2. Construct the subsystem in `createServer` and pass it through `createToolContext({ ..., new_field: ... })`.
+3. Tools that need the new subsystem destructure it from `ctx`.
+4. Apply invariant #41 to the subsystem's settle semantics.
+
+No signature change required for tools that don't use the new subsystem — they ignore the new field.
+
+**§AB.3. Methodology: blocklist-fix verify-then-smoke pattern.**
+
+Documented in `CLAUDE.md` (operational), not in the spec (procedural rather than architectural). Captured here as a back-reference: external-review findings that propose blocklist-pattern changes require BOTH pre-fix verify (demonstrate the under-block via a failing test) AND post-fix smoke against legitimate use cases in the same syntactic neighborhood. The `-EncodedCommand` greedy-pattern over-block in the v0.7 pre-tag bug-fix wave (commit `2bb8a69` over-blocked `node -e` / `python -e` / `perl -e`; fix in `7b7a41c` added PowerShell-context lookahead) is the canonical example.
+
+**Wave summary.** Spec invariant set grew from #40 to #41 (+1). One new internal interface (`ToolContext`) and one register*Tool signature change (`(server, config, audit, registry?)` → `(server, ctx)`). No user-facing behaviour change. No version bump; `[Unreleased]` continues.
