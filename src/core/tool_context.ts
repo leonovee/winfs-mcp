@@ -1,5 +1,6 @@
 import type { ResolvedConfig } from "./config.js";
 import type { ProcessRegistry } from "./process_registry.js";
+import type { RootsResolver } from "./roots_resolver.js";
 
 /**
  * Shared per-server context passed to every `register*Tool` registration.
@@ -21,10 +22,20 @@ import type { ProcessRegistry } from "./process_registry.js";
  * Threading it through context would change a stable single-module
  * surface for no benefit. The wave-2c prompt suggested an `audit` field;
  * we deviate per the project's existing convention.
+ *
+ * v0.9 extension: `rootsResolver` field. Owner of the effective
+ * `allowedRoots` set during the server's lifetime — merges
+ * `config.allowedRoots` with MCP-Roots-supplied client roots (spec §AC,
+ * invariant #42). Most tools never touch this field directly; they
+ * continue to call `checkAllowed(path, config, opts)` which reads
+ * `config.resolvedAllowedRoots` — kept in sync by the resolver via
+ * in-place mutation. Tools that explicitly enumerate the live root set
+ * (e.g. `list_allowed_directories`) can call `ctx.rootsResolver.effective()`.
  */
 export interface ToolContext {
   readonly config: ResolvedConfig;
   readonly registry: ProcessRegistry;
+  readonly rootsResolver: RootsResolver;
 }
 
 /**
@@ -34,9 +45,11 @@ export interface ToolContext {
 export function createToolContext(parts: {
   config: ResolvedConfig;
   registry: ProcessRegistry;
+  rootsResolver: RootsResolver;
 }): ToolContext {
   return {
     config: parts.config,
     registry: parts.registry,
+    rootsResolver: parts.rootsResolver,
   };
 }

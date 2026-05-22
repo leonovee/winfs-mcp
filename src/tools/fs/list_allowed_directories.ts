@@ -48,6 +48,12 @@ before attempting any read/write/list/stat call.
 Args: {} (none)
 Returns: { allowed_roots: string[], allowed_url_hosts: string[] }
 
+v0.9 §AC: \`allowed_roots\` reflects the LIVE effective set —
+\`config.allowedRoots\` ∪ MCP-Roots-supplied client roots. If the client
+signals its project roots via \`roots/list_changed\`, this list updates
+mid-session without restart. Call this tool whenever you suspect the
+effective root set may have changed.
+
 The output is intentionally minimal — blocklists, timeouts and the audit
 log path are not exposed.`,
       inputSchema: InputShape,
