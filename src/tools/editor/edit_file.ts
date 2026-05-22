@@ -94,6 +94,7 @@ export function getEditFileAuditExtras(value: EditFileResult): EditFileAuditExtr
 export async function editFileImpl(
   args: Input,
   config: ResolvedConfig,
+  signal?: AbortSignal,
 ): Promise<Result<EditFileResult>> {
   const check = await checkAllowed(args.path, config);
   if ("ok" in check && check.ok === false) return check;
@@ -101,6 +102,9 @@ export async function editFileImpl(
 
   let stat: import("node:fs").Stats;
   try {
+    // P1.1: thread signal through fs.stat / fs.readFile / atomicWriteFile so
+    // the wall-clock deadline from withTimeout actually aborts in-flight I/O
+    // instead of leaving an orphan running past ETIMEDOUT.
     stat = await fs.stat(realPath);
   } catch (err) {
     return fromNodeError(err, "stat failed");
@@ -118,7 +122,7 @@ export async function editFileImpl(
 
   let buf: Buffer;
   try {
-    buf = await fs.readFile(realPath);
+    buf = await fs.readFile(realPath, { signal });
   } catch (err) {
     return fromNodeError(err, "read failed");
   }
@@ -152,7 +156,12 @@ export async function editFileImpl(
       let hint: string;
       if (expected === 1 && occ === 0) {
         message = `edit[${i}].old_str not found in current buffer`;
-        hint = "An earlier edit may have removed the target. Edits apply sequentially to the in-memory buffer.";
+        // P2.1: the "earlier edit may have removed" hint is only meaningful
+        // when i > 0. For edit[0] the substring is simply absent; suggesting
+        // a phantom earlier edit is misleading.
+        hint = i > 0
+          ? "An earlier edit may have removed the target. Edits apply sequentially to the in-memory buffer."
+          : "The substring was not found in the file. Check spelling and surrounding whitespace.";
       } else if (expected === 1 && occ > 1) {
         message = `edit[${i}].old_str appears ${occ} times; must be exactly 1`;
         hint = "Provide more surrounding context in old_str to make it unique, or pass expected_count to assert a specific count.";
@@ -225,7 +234,7 @@ export async function editFileImpl(
 
   if (!args.dry_run) {
     try {
-      await atomicWriteFile(realPath, buffer);
+      await atomicWriteFile(realPath, buffer, { signal });
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e?.code === "EBUSY" || e?.code === "EACCES" || e?.code === "EPERM") {
@@ -325,7 +334,7 @@ new_str content are NEVER persisted (continuation of write/append content redact
           },
         },
         args,
-        (a) => editFileImpl(a as Input, config),
+        (a, sig) => editFileImpl(a as Input, config, sig),
       ),
   );
 }
