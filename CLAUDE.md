@@ -71,6 +71,23 @@
 
 ## Операционные заметки
 
+### Blocklist-pattern fixes from external review require verify-then-smoke
+
+External-review findings that propose blocklist-pattern changes (typically `exec_safety.ts` regex additions for new dangerous flags / cmdlets / aliases) introduce a **two-sided risk**:
+
+1. **Under-block** — the reviewer's original concern: pattern allows what it shouldn't.
+2. **Over-block** — the proposed fix matches legitimate use cases that share the same syntactic neighborhood as the dangerous form.
+
+Both are real defects. Procedure to catch both:
+
+1. **Pre-fix verify** (Phase 0 of any bug-fix wave). Write a failing test that demonstrates the under-block — i.e. the current pattern allows what the reviewer claims it allows. If the test passes against current code, the finding is invalid; close it as a false positive in `_invalidated_findings.md`.
+
+2. **Post-fix smoke** (within the same wave OR before tag). After applying the pattern fix, run the wire-level smoke harness (or a targeted suite) that exercises every legitimate use case in the same syntactic neighborhood as the dangerous form. For `-EncodedCommand` (PowerShell-specific destructive-flag), the over-block check is `node -e "..."`, `python -e ...`, `perl -e '...'`, `ruby -e ...` — short `-e` flags on different binaries that share the prefix but are not the attack path. The smoke MUST NOT trigger the blocklist on any of those.
+
+**Reference incident:** the `-EncodedCommand` greedy-pattern over-block in the v0.7 pre-tag bug-fix wave (commit `2bb8a69`) was caught by the very first start_process smoke probe (`node -e "console.log('hi'); process.exit(0)"` returned `EBLOCKED`). Fix in `7b7a41c` added a positive-lookahead context anchor requiring `powershell` or `pwsh` to appear in the composed string before the `-e` flag matches. Without the smoke harness, the over-block would have shipped to v0.7.0 and silently broken every legitimate `node -e` / `python -e` invocation through `execute_command`.
+
+**When in doubt**: list every binary on PATH that accepts `-<x>` flags resembling the new pattern. If the regex would match any of them in a non-attack context, the pattern needs a context anchor.
+
 ### MCP transport — периодические зависания
 
 Вызовы MCP-инструментов из Claude Desktop иногда возвращают `No result received ... after waiting 4 minutes`. Эмпирически паттерн такой: 2–3 четырёхминутных таймаута на одном и том же вызове, затем следующий вызов проходит мгновенно. Рабочая последовательность:
