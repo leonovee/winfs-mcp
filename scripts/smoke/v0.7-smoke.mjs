@@ -20,7 +20,7 @@ import * as path from "node:path";
 const WINFS = "C:\\Users\\User\\Desktop\\ai\\tools\\winfs";
 const SMOKE_DIR = path.join(WINFS, ".v07_smoke_dir");
 const SMOKE_TMP = path.join(WINFS, ".v07_smoke_tmp.txt");
-const EXPECTED_TOOL_COUNT = 37; // 30 (v0.6) + 3 (wave 1) + 4 (wave 2b)
+const EXPECTED_TOOL_COUNT = 39; // 30 (v0.6) + 3 (wave 1) + 4 (wave 2b) + 2 (v0.8 P4: directory_tree, read_media_file)
 const EXPECTED_VERSION = "0.7.2";
 
 function spawnServer(configPath) {
@@ -290,6 +290,143 @@ async function probesWave1(srv) {
     !isError(r) && sc?.data?.replaced === true
       ? ok("wave1: write_json round-trip", "data.replaced=true")
       : fail("wave1: write_json round-trip", "data.replaced:true", isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  return results;
+}
+
+// ────── v0.8 filesystem-MCP parity ────────────────────────────────────────
+
+async function probesV08(srv) {
+  const results = [];
+
+  // read head:N — first N lines
+  const linesFile = path.join(SMOKE_DIR, "head_tail.txt");
+  // (page.txt from setupSandbox is 200 lines of "line N match"; reuse it)
+  let r = await call(srv, "read", {
+    path: path.join(SMOKE_DIR, "page.txt"),
+    head: 3,
+  });
+  let sc = parseSuccessContent(r);
+  results.push(
+    !isError(r) && sc?.lines_returned === 3 && sc?.content?.startsWith("line 1 match")
+      ? ok("v0.8 P4.1: read head:3", `lines=3, first='line 1 match'`)
+      : fail("v0.8 P4.1: read head:3", "lines_returned:3 + content starts 'line 1 match'", isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // read tail:N — last N lines
+  r = await call(srv, "read", {
+    path: path.join(SMOKE_DIR, "page.txt"),
+    tail: 2,
+  });
+  sc = parseSuccessContent(r);
+  results.push(
+    !isError(r) && sc?.lines_returned === 2 && sc?.content?.includes("line 199 match") && sc?.content?.includes("line 200 match")
+      ? ok("v0.8 P4.1: read tail:2", `lines=2, includes line 199 + 200`)
+      : fail("v0.8 P4.1: read tail:2", "lines_returned:2 + lines 199 + 200", isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // read head + tail → EINVAL
+  r = await call(srv, "read", {
+    path: path.join(SMOKE_DIR, "page.txt"),
+    head: 1,
+    tail: 1,
+  });
+  let e = isError(r) ? parseErrorContent(r) : null;
+  results.push(
+    e?.code === "EINVAL"
+      ? ok("v0.8 P4.1: read head + tail → EINVAL (mutex)", "EINVAL")
+      : fail("v0.8 P4.1: read head + tail → EINVAL (mutex)", "EINVAL", e ?? parseSuccessContent(r)),
+  );
+
+  // list sort_by='size' — largest first
+  r = await call(srv, "list", {
+    path: SMOKE_DIR,
+    max_depth: 1,
+    sort_by: "size",
+  });
+  sc = parseSuccessContent(r);
+  results.push(
+    !isError(r) && Array.isArray(sc?.entries) && sc.entries.length >= 2 &&
+      sc.entries[0].size >= sc.entries[1].size
+      ? ok("v0.8 P4.3: list sort_by='size' (descending)",
+           `top size=${sc.entries[0].size}, 2nd size=${sc.entries[1].size}`)
+      : fail("v0.8 P4.3: list sort_by='size' (descending)",
+             "entries[0].size >= entries[1].size", isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // directory_tree happy path
+  r = await call(srv, "directory_tree", {
+    path: SMOKE_DIR,
+    max_depth: 2,
+  });
+  sc = parseSuccessContent(r);
+  results.push(
+    !isError(r) && sc?.root?.type === "directory" && Array.isArray(sc.root.children) &&
+      sc.root.children.length > 0 && typeof sc?.total_nodes === "number"
+      ? ok("v0.8 P4.2: directory_tree returns recursive JSON",
+           `root.type=directory, ${sc.root.children.length} children, total_nodes=${sc.total_nodes}`)
+      : fail("v0.8 P4.2: directory_tree returns recursive JSON",
+             "root.children + total_nodes", isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // directory_tree exclude_patterns
+  r = await call(srv, "directory_tree", {
+    path: SMOKE_DIR,
+    max_depth: 2,
+    exclude_patterns: ["*.json"],
+  });
+  sc = parseSuccessContent(r);
+  const hasJsonAfterExclude = sc?.root?.children?.some((c) => c.name.endsWith(".json"));
+  results.push(
+    !isError(r) && hasJsonAfterExclude === false
+      ? ok("v0.8 P4.2: directory_tree exclude_patterns hides matches", "no .json in tree")
+      : fail("v0.8 P4.2: directory_tree exclude_patterns hides matches",
+             "no .json children", isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // read_media_file: create a small PNG via Buffer, store in SMOKE_DIR, read back
+  // The setupSandbox writes JSON; let's write a synthetic small binary in the
+  // probe itself by sending a base64 round-trip command — but we have no
+  // base64-write tool through the JSON-RPC wire. Use write to put a binary-ish
+  // payload (octet bytes that won't trip looksBinary in the read tool? no, we
+  // want it to be looksBinary so read_media_file's contract makes sense).
+  //
+  // Easier: write a JSON file (already exists at data.json from setupSandbox)
+  // and read it through read_media_file. It's not binary but read_media_file
+  // doesn't care — it returns base64 regardless of content.
+  r = await call(srv, "read_media_file", {
+    path: path.join(SMOKE_DIR, "data.json"),
+  });
+  sc = parseSuccessContent(r);
+  results.push(
+    !isError(r) && typeof sc?.base64 === "string" && sc.base64.length > 0 &&
+      typeof sc?.content_type === "string" && sc?.bytes_read > 0
+      ? ok("v0.8 P4.4: read_media_file returns base64 + content_type",
+           `content_type=${sc.content_type}, bytes_read=${sc.bytes_read}`)
+      : fail("v0.8 P4.4: read_media_file returns base64 + content_type",
+             "base64 + content_type + bytes_read", isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // read_media_file with max_bytes opts into truncation
+  r = await call(srv, "read_media_file", {
+    path: path.join(SMOKE_DIR, "data.json"),
+    max_bytes: 5,
+  });
+  sc = parseSuccessContent(r);
+  results.push(
+    !isError(r) && sc?.bytes_read === 5 && sc?.truncated === true
+      ? ok("v0.8 P4.4: read_media_file max_bytes truncates", "bytes_read=5, truncated=true")
+      : fail("v0.8 P4.4: read_media_file max_bytes truncates", "bytes_read:5 + truncated:true", isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // read_media_file EISDIR on directory
+  r = await call(srv, "read_media_file", { path: SMOKE_DIR });
+  e = isError(r) ? parseErrorContent(r) : null;
+  results.push(
+    e?.code === "EISDIR"
+      ? ok("v0.8 P4.4: read_media_file EISDIR on directory", "EISDIR")
+      : fail("v0.8 P4.4: read_media_file EISDIR on directory", "EISDIR", e ?? parseSuccessContent(r)),
   );
 
   return results;
@@ -783,6 +920,7 @@ async function runStrictPass() {
     allResults.push(...(await probesWave2a(srv)));
     allResults.push(...(await probesWave2b(srv)));
     allResults.push(...(await probesBugfix(srv)));
+    allResults.push(...(await probesV08(srv)));
   } finally {
     await srv.stop();
   }
