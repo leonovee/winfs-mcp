@@ -6,8 +6,124 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 ## [Unreleased]
 
 (Future patch wave: Windows-flaky process tests, deferred P2 review-wave
-findings, P1 MCP Roots protocol support, P3 audit-IO investigation.
-See README §"Known limitations" and `backlog/v0.8-filesystem-mcp-parity.md`.)
+findings. P1 MCP Roots and P3 audit-IO investigation BOTH closed in
+v0.9.0 / v0.8.0 respectively. See README §"Known limitations".)
+
+## [0.9.0] — 2026-05-22 — MCP Roots protocol support
+
+The operational pain that v0.7 hit repeatedly — editing
+`%LOCALAPPDATA%\mcp-winfs\config.json` and restarting Claude Desktop
+every time a new project root needed access — is gone. With this
+release, an MCP-Roots-aware client (Claude Desktop, VS Code, Cursor)
+signals its project roots at connection time AND via runtime
+`notifications/roots/list_changed`. winfs auto-updates its effective
+allowed-roots set without restart.
+
+### Design call: union mode, not replace mode
+
+`effectiveAllowedRoots = union(config.allowedRoots, clientRoots)`.
+
+Rationale (spec §AC.1):
+- winfs's safety posture is "narrow by default". Union widens only
+  when both server-side config AND client-side roots trust a path.
+- Replace mode (the reference Filesystem-MCP server's choice) can
+  surprisingly REDUCE allowed access if the client doesn't know about
+  config-supplied roots.
+- Empty client roots → config-only access (no regression vs pre-v0.9).
+- Client roots can only widen, never silently remove paths the
+  operator explicitly trusted via config.
+
+### Added
+
+- **`src/core/roots_resolver.ts`** — `RootsResolver` class. Owns the
+  effective `allowedRoots` set for the server's lifetime. Snapshots
+  the config-supplied roots at construction; later `setClientRoots`
+  calls compute the dedup'd union (case-insensitive on Windows) and
+  mutate `config.resolvedAllowedRoots` in place. Validates each
+  client root: absolute, exists, is a directory, realpath-resolved
+  (defeats symlink-escape). Invalid roots SKIPPED with stderr
+  warning; valid roots in the same batch still applied
+  (partial-success semantics).
+
+- **`ToolContext.rootsResolver: RootsResolver`** field (per spec
+  §AB.2 extension rule). Most tools never touch this field directly;
+  they continue to read `config.resolvedAllowedRoots` (kept in sync
+  by the resolver via in-place mutation). `list_allowed_directories`
+  documentation updated to mention the live union semantics.
+
+- **`server.ts` MCP-Roots wiring.** `oninitialized` handler checks
+  client capability and fires-and-forgets `listRoots()` on connect.
+  `RootsListChangedNotificationSchema` subscriber re-fetches roots
+  on runtime updates. Either handler failing is non-fatal: stderr
+  message, degrade to config-only roots, server continues.
+
+- **Audit event `_client_roots_updated`** — emitted on every
+  successful `setClientRoots` with `{ accepted_count, rejected_count,
+  config_roots_count, effective_count }`. COUNTS ONLY — never path
+  strings. Including path content would leak the caller's directory
+  layout into a record that may be transported / archived; live
+  effective set is already discoverable via `list_allowed_directories`.
+
+### Changed (internal API only — no user-facing tool change)
+
+- `ToolContext` gained a third field (`rootsResolver`).
+  `createToolContext({ config, registry, rootsResolver })` signature
+  updated accordingly.
+- `config.resolvedAllowedRoots` is now SHARED MUTABLE STATE owned by
+  `RootsResolver`. The previous "config is immutable post-loadConfig"
+  convention is amended: this is the single field with a designated
+  mutator. Every other reader treats the array as read-only.
+
+  The `checkAllowed` signature, all 39 register*Tool signatures, and
+  every `*Impl` signature stay unchanged — the in-place mutation
+  pattern means the 17 existing readers of `config.resolvedAllowedRoots`
+  automatically pick up the union.
+
+### Tests + smoke
+
+- 433 → 450 passing (+17 across two new test files):
+  - `tests/unit/core/roots_resolver.test.ts` (+11): construction
+    snapshots config roots; empty/non-empty client union; dedup
+    config+client; invalid root variants (non-absolute, non-existent,
+    file-not-directory) skipped with warnings; replacement (not
+    accumulative); config roots are never removed; `_client_roots_updated`
+    audit shape including the no-paths-in-audit assertion.
+  - `tests/invariants/roots_resolver_integration.test.ts` (+6): end-
+    to-end via `readImpl` / `listImpl` — client root grants access,
+    config root retains access, both-missing → EPERM_ROOT, revoke
+    works, direct `checkAllowed` honours client roots.
+- Smoke 66 → 72 probes (+6 in new MCP-Roots pass): client root
+  appears in `list_allowed_directories`, union count ≥ 2, read on
+  client-only path succeeds, stderr shows initial fetch, no-roots
+  client → EPERM_ROOT on client-only path (back-compat), client
+  capability absent → config-only access. New `spawnServerWithRoots`
+  + `handshakeWithRoots` harness variants advertise the `roots`
+  capability and respond to inbound `roots/list` requests with a
+  fixed root list.
+
+### Docs
+
+- Spec section §AC — MCP Roots integration. Six subsections covering
+  union mode, implementation, validation, server wiring, audit
+  record, capability declaration.
+- Spec invariant #42 — "effective allowed roots are the union of
+  config and client roots". Generalises the spec's stance on
+  shared-mutable-state ownership (config.resolvedAllowedRoots joins
+  ProcessRegistry as a SHARED mutable subsystem with a single owner).
+- `list_allowed_directories` tool description extended with §AC
+  reference + note that the list reflects the live union.
+
+### SDK + version
+
+`@modelcontextprotocol/sdk` version unchanged (`^1.29.0` — already
+exports `RootsListChangedNotificationSchema`, `getClientCapabilities`,
+`listRoots`, `oninitialized`).
+
+Version bump 0.8.0 → 0.9.0. Breaking-change consideration: the
+`ToolContext` shape change is internal-API only; no downstream
+consumer of public exports is broken. The MCP-protocol-level addition
+(consuming client `roots`) is purely additive — clients without
+`roots` capability continue working exactly as before.
 
 ## [0.8.0] — 2026-05-22 — filesystem-MCP parity + ToolContext refactor
 
