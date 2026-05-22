@@ -16,12 +16,13 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 
 const WINFS = "C:\\Users\\User\\Desktop\\ai\\tools\\winfs";
 const SMOKE_DIR = path.join(WINFS, ".v07_smoke_dir");
 const SMOKE_TMP = path.join(WINFS, ".v07_smoke_tmp.txt");
 const EXPECTED_TOOL_COUNT = 39; // 30 (v0.6) + 3 (wave 1) + 4 (wave 2b) + 2 (v0.8 P4: directory_tree, read_media_file)
-const EXPECTED_VERSION = "0.8.0";
+const EXPECTED_VERSION = "0.9.0";
 
 function spawnServer(configPath) {
   const child = spawn(
@@ -95,6 +96,108 @@ async function handshake(srv) {
   });
   srv.notify("notifications/initialized", {});
   await new Promise((r) => setTimeout(r, 300));
+  return init.result;
+}
+
+// v0.9: spawn variant that ALSO advertises the `roots` client capability
+// and responds to inbound `roots/list` requests with a fixed root list.
+// This is what an MCP-Roots-aware client (Claude Desktop, VS Code, Cursor)
+// looks like from the server's point of view.
+function spawnServerWithRoots(configPath, initialRoots) {
+  const child = spawn(
+    process.platform === "win32" ? "node.exe" : "node",
+    [path.join(WINFS, "dist", "index.js"), "--config", configPath],
+    { stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
+  );
+  const stderrLines = [];
+  let stdoutBuf = "";
+  const pending = new Map();
+  let nextId = 1;
+  let currentRoots = initialRoots.map((p) => ({ uri: `file:///${p.replace(/\\/g, "/")}`, name: p }));
+
+  const handleInboundRequest = (msg) => {
+    // Server-to-client request — we respond. Only `roots/list` is expected.
+    if (msg.method === "roots/list") {
+      child.stdin.write(
+        JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { roots: currentRoots } }) + "\n",
+      );
+    } else {
+      // Unknown server-to-client request → JSON-RPC method-not-found
+      child.stdin.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: msg.id,
+          error: { code: -32601, message: "method not found" },
+        }) + "\n",
+      );
+    }
+  };
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuf += chunk.toString("utf8");
+    let nl;
+    while ((nl = stdoutBuf.indexOf("\n")) >= 0) {
+      const line = stdoutBuf.slice(0, nl).replace(/\r$/, "");
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        // Server-initiated request (has method + id but no result/error)
+        if (msg.method && msg.id !== undefined && msg.result === undefined && msg.error === undefined) {
+          handleInboundRequest(msg);
+          continue;
+        }
+        if (msg.id !== undefined && pending.has(msg.id)) {
+          const { resolve } = pending.get(msg.id);
+          pending.delete(msg.id);
+          resolve(msg);
+        }
+      } catch {
+        /* ignore non-JSON */
+      }
+    }
+  });
+  child.stderr.on("data", (chunk) => stderrLines.push(chunk.toString("utf8")));
+
+  const send = (method, params, timeoutMs = 30000) =>
+    new Promise((resolve, reject) => {
+      const id = nextId++;
+      pending.set(id, { resolve, reject });
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          reject(new Error(`timeout: ${method}`));
+        }
+      }, timeoutMs);
+    });
+
+  return {
+    send,
+    stderrText: () => stderrLines.join(""),
+    notify(method, params) {
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+    },
+    setRoots(newRoots) {
+      currentRoots = newRoots.map((p) => ({ uri: `file:///${p.replace(/\\/g, "/")}`, name: p }));
+    },
+    async stop() {
+      try { child.kill(); } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    },
+  };
+}
+
+async function handshakeWithRoots(srv) {
+  const init = await srv.send("initialize", {
+    protocolVersion: "2024-11-05",
+    capabilities: { roots: { listChanged: true } },
+    clientInfo: { name: "v0.7-smoke-roots", version: "0.1.0" },
+  });
+  srv.notify("notifications/initialized", {});
+  // Wait long enough for the server's oninitialized handler to fire +
+  // listRoots round-trip + resolver.setClientRoots to complete.
+  await new Promise((r) => setTimeout(r, 800));
   return init.result;
 }
 
@@ -292,6 +395,98 @@ async function probesWave1(srv) {
       : fail("wave1: write_json round-trip", "data.replaced:true", isError(r) ? parseErrorContent(r) : sc),
   );
 
+  return results;
+}
+
+// ────── v0.9 MCP Roots protocol ──────────────────────────────────────────
+
+async function probesV09Roots() {
+  // Self-contained: own server instance, own client harness that advertises
+  // `roots` capability and responds to inbound `roots/list` requests.
+  const results = [];
+
+  // Create a separate temp directory that is NOT in configs/local.json so we
+  // can verify it's accessible ONLY when MCP Roots negotiates it in.
+  const v09ClientRoot = await fs.mkdtemp(path.join(os.tmpdir(), "winfs-v09-client-root-"));
+  const v09Resolved = await fs.realpath(v09ClientRoot);
+  const v09Target = path.join(v09Resolved, "client-only.txt");
+  await fs.writeFile(v09Target, "hello from a client-only root", "utf8");
+
+  // Spawn 1: client DOES advertise roots → list_allowed_directories
+  // includes the new root, read against it succeeds.
+  const srv = spawnServerWithRoots(
+    path.join(WINFS, "configs", "local.json"),
+    [v09Resolved],
+  );
+  try {
+    await handshakeWithRoots(srv);
+
+    // Confirm the union — list_allowed_directories must include both config
+    // roots AND our client root.
+    let r = await call(srv, "list_allowed_directories", {});
+    let sc = parseSuccessContent(r);
+    const allowedSet = new Set((sc?.allowed_roots ?? []).map((p) => p.toLowerCase()));
+    results.push(
+      allowedSet.has(v09Resolved.toLowerCase())
+        ? ok("v0.9 §AC: client root appears in list_allowed_directories", `root=${v09Resolved}`)
+        : fail("v0.9 §AC: client root appears in list_allowed_directories",
+               `${v09Resolved} present`, [...allowedSet]),
+    );
+    results.push(
+      sc?.allowed_roots?.length >= 2
+        ? ok("v0.9 §AC: effective roots = config ∪ client (union)", `count=${sc.allowed_roots.length}`)
+        : fail("v0.9 §AC: effective roots = config ∪ client (union)", "≥ 2 roots", sc?.allowed_roots),
+    );
+
+    // read on client-only path succeeds (would be EPERM_ROOT without roots).
+    r = await call(srv, "read", { path: v09Target });
+    sc = parseSuccessContent(r);
+    results.push(
+      !isError(r) && sc?.content === "hello from a client-only root"
+        ? ok("v0.9 §AC: read on client-only path succeeds", "content matches")
+        : fail("v0.9 §AC: read on client-only path succeeds", "content matches", isError(r) ? parseErrorContent(r) : sc),
+    );
+
+    // Confirm stderr ready-line + MCP Roots fetch message
+    const stderr = srv.stderrText();
+    results.push(
+      /MCP Roots initial fetch: \d+ root\(s\) accepted/.test(stderr)
+        ? ok("v0.9 §AC: stderr shows initial roots fetch", "match")
+        : fail("v0.9 §AC: stderr shows initial roots fetch", "regex match", stderr.slice(0, 400)),
+    );
+  } finally {
+    await srv.stop();
+  }
+
+  // Spawn 2: client does NOT advertise roots → effective = config only
+  // (regression check: confirms back-compat for clients without roots).
+  const srv2 = spawnServer(path.join(WINFS, "configs", "local.json"));
+  try {
+    await handshake(srv2);
+    const r = await call(srv2, "list_allowed_directories", {});
+    const sc = parseSuccessContent(r);
+    const allowedSet = new Set((sc?.allowed_roots ?? []).map((p) => p.toLowerCase()));
+    results.push(
+      !allowedSet.has(v09Resolved.toLowerCase())
+        ? ok("v0.9 §AC: client root absent when client doesn't advertise roots (back-compat)",
+             "client-only root excluded")
+        : fail("v0.9 §AC: client root absent when client doesn't advertise roots (back-compat)",
+               "client-only root NOT in effective", [...allowedSet]),
+    );
+
+    // read on client-only path fails (no MCP Roots negotiated)
+    const r2 = await call(srv2, "read", { path: v09Target });
+    const e2 = isError(r2) ? parseErrorContent(r2) : null;
+    results.push(
+      e2?.code === "EPERM_ROOT"
+        ? ok("v0.9 §AC: no-roots-client → EPERM_ROOT on client-only path", "EPERM_ROOT")
+        : fail("v0.9 §AC: no-roots-client → EPERM_ROOT on client-only path", "EPERM_ROOT", e2 ?? parseSuccessContent(r2)),
+    );
+  } finally {
+    await srv2.stop();
+  }
+
+  try { await fs.rm(v09ClientRoot, { recursive: true, force: true }); } catch {}
   return results;
 }
 
@@ -1067,16 +1262,28 @@ async function main() {
     console.error("UNRESTRICTED pass crashed:", e);
     unrestrictedResults = [{ name: "UNRESTRICTED pass", pass: false, expected: "complete", got: String(e) }];
   }
+
+  // v0.9 MCP Roots probes — own pass (own server instance + client harness).
+  let rootsResults;
+  console.log("\n========== v0.9 MCP-ROOTS PASS ==========");
+  try {
+    rootsResults = await probesV09Roots();
+  } catch (e) {
+    console.error("MCP-ROOTS pass crashed:", e);
+    rootsResults = [{ name: "v0.9 §AC: MCP-Roots pass", pass: false, expected: "complete", got: String(e) }];
+  }
+
   await cleanupSandbox();
 
   const s = printReport("STRICT mode results", strictResults);
   const u = printReport("UNRESTRICTED mode results", unrestrictedResults);
-  const totalPass = s.pass + u.pass;
-  const totalFail = s.fails + u.fails;
-  const totalSkip = s.skipped + u.skipped;
+  const v = printReport("v0.9 MCP-Roots results", rootsResults);
+  const totalPass = s.pass + u.pass + v.pass;
+  const totalFail = s.fails + u.fails + v.fails;
+  const totalSkip = s.skipped + u.skipped + v.skipped;
   const totalCount = totalPass + totalFail;
   const dur = Date.now() - t0;
-  console.log(`\n=== OVERALL: ${totalPass}/${totalCount} probes green (strict ${s.pass}/${s.pass + s.fails}, unrestricted ${u.pass}/${u.pass + u.fails})`);
+  console.log(`\n=== OVERALL: ${totalPass}/${totalCount} probes green (strict ${s.pass}/${s.pass + s.fails}, unrestricted ${u.pass}/${u.pass + u.fails}, mcp-roots ${v.pass}/${v.pass + v.fails})`);
   console.log(`    skipped: ${totalSkip}`);
   console.log(`    duration: ${dur}ms`);
   if (totalFail > 0) process.exit(1);
