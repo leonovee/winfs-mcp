@@ -3,15 +3,20 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased] — v0.8 filesystem-MCP parity (P2 + P4 bundle)
+## [Unreleased]
 
-Items distilled from a 2026-05-22 comparison of winfs against the
-reference `@modelcontextprotocol/server-filesystem` (see
-`backlog/v0.8-filesystem-mcp-parity.md`). Bundles the P2 annotation
-sweep + four P4 small parity items. P1 (MCP Roots protocol) and P3
-(audit IO investigation) remain in the backlog for separate waves.
+(Future patch wave: Windows-flaky process tests, deferred P2 review-wave
+findings, P1 MCP Roots protocol support, P3 audit-IO investigation.
+See README §"Known limitations" and `backlog/v0.8-filesystem-mcp-parity.md`.)
 
-Tool surface: 37 → 39 (+2 new tools).
+## [0.8.0] — 2026-05-22 — filesystem-MCP parity + ToolContext refactor
+
+First minor bump since v0.7.0. Bundles wave 2c (architectural closure —
+ToolContext refactor + invariant #41 + methodology notes) with the v0.8
+filesystem-MCP parity sweep (P2 annotation fix + P4 small parity items).
+Tool surface 37 → 39. No user-facing tool surface change is breaking;
+the internal `register*Tool` signature change is a one-time refactor
+flagged in the migration note below.
 
 ### Added — new tools (2)
 
@@ -57,56 +62,22 @@ Tool surface: 37 → 39 (+2 new tools).
   other 36 register*Tool annotations were spot-checked and found
   correct as-is.
 
-### Tests + smoke
+### Changed — internal API (wave 2c refactor)
 
-- 408 → 433 passing (+25 across 4 new test files; excluding the 10
-  pre-existing Windows-flaky `tests/unit/process/*` tests carried
-  from v0.7.x):
-  - `tests/unit/fs/read_head_tail.test.ts` (+7): head, tail,
-    overshoot, head+tail mutex, head+range mutex, tail+range mutex,
-    all-three mutex.
-  - `tests/unit/fs/list_sort_by.test.ts` (+4): sort_by name / size /
-    mtime + omit-preserves-walk-order sentinel.
-  - `tests/unit/fs/directory_tree.test.ts` (+7): happy, nested,
-    exclude_patterns basename, exclude_patterns glob, max_depth=1
-    truncates with `truncated_reason: 'max_depth'`, EPERM_ROOT outside
-    roots, ENOTDIR on file path.
-  - `tests/unit/file/read_media_file.test.ts` (+7): PNG round-trip,
-    content-type mapping (8 extensions), unknown extension → octet-
-    stream, ETOOLARGE without max_bytes, max_bytes truncate contract
-    (`truncated: true` + exact bytes_read), EPERM_ROOT, EISDIR.
+- **`register*Tool` signature.** All 37 (now 39) tool registrations
+  take `(server, ctx: ToolContext)` instead of positional
+  `(server, config[, registry])`. Future stateful subsystems
+  (FileWatchRegistry, JobQueue, persistent shell, etc.) add a field
+  to the `ToolContext` interface instead of a positional parameter
+  to every register call site.
 
-- Smoke 55 → 66 probes (+9 in new probesV08 section): read head/tail +
-  mutex, list sort_by:'size', directory_tree happy + exclude_patterns,
-  read_media_file base64+content_type + max_bytes truncate + EISDIR.
-  All green on first run.
-
-### Out-of-scope (per backlog)
-
-- **P1 — MCP Roots protocol support.** Largest item; per backlog "should
-  be its own wave — don't bundle". Stays in `backlog/v0.8-filesystem-
-  mcp-parity.md` for a future wave.
-- **P3 — Audit log IO investigation.** Investigation rather than a fix;
-  output is a report at `audit/investigations/` plus a follow-up prompt
-  if action warranted. Stays in backlog.
-
-## [Unreleased] — v0.7 wave 2c (architectural closure)
-
-Three architectural / methodological items consolidated while the
-codebase is fresh and no downstream consumer depends on the internal
-signatures. No user-facing behaviour change.
-
-### Changed — register*Tool signature (internal API)
-
-`register*Tool(server, config, ...)` → `register*Tool(server, ctx: ToolContext)`.
-Every tool registration now takes a single `ctx` object holding `config`
-and the `ProcessRegistry`. Pre-wave: 33 tools had `(server, config)`,
-4 wave-2b tools had `(server, config, registry)`. Future stateful
-subsystems (FileWatchRegistry, JobQueue, etc.) add a field to the
-context interface instead of a positional parameter to every register
-call site.
+- **`createServer` return shape.** Was `{ server, registry }`; now
+  `{ server, ctx }` with `ctx.registry` and `ctx.config`. `src/index.ts`
+  reaches the registry via `ctx.registry.shutdown()` in its
+  SIGINT/SIGTERM handler.
 
 Migration note for downstream consumers of the public exports:
+
 ```ts
 // before
 const { server, registry } = createServer(config);
@@ -119,22 +90,8 @@ registerReadTool(server, ctx);
 registerStartProcessTool(server, ctx);
 ```
 
-If you build a custom `ToolContext` directly (e.g. in a test harness),
-construct via `createToolContext({ config, registry })` from
-`src/core/tool_context.js`.
-
-### Changed — createServer return shape
-
-```ts
-// before
-{ server: McpServer; registry: ProcessRegistry }
-
-// after
-{ server: McpServer; ctx: ToolContext }   // ctx.registry, ctx.config
-```
-
-`src/index.ts` reaches the registry as `ctx.registry.shutdown()` in
-its SIGINT/SIGTERM handler.
+Build a custom context in tests via `createToolContext({ config, registry })`
+from `src/core/tool_context.js`. No user-facing tool surface change.
 
 ### Docs
 
@@ -160,10 +117,38 @@ its SIGINT/SIGTERM handler.
 
 ### Tests + smoke
 
-No code-behaviour change → no test or smoke count delta. Suite
-remains at 408 passing (excluding the 10 pre-existing Windows-flaky
-`tests/unit/process/*` tests still on the future-patch list). Smoke
-remains at 57/57 probes green.
+- 408 → 433 passing (+25 across 4 new test files; excluding the 10
+  pre-existing Windows-flaky `tests/unit/process/*` tests carried
+  from v0.7.x):
+  - `tests/unit/fs/read_head_tail.test.ts` (+7): head, tail,
+    overshoot, head+tail mutex, head+range mutex, tail+range mutex,
+    all-three mutex.
+  - `tests/unit/fs/list_sort_by.test.ts` (+4): sort_by name / size /
+    mtime + omit-preserves-walk-order sentinel.
+  - `tests/unit/fs/directory_tree.test.ts` (+7): happy, nested,
+    exclude_patterns basename, exclude_patterns glob, max_depth=1
+    truncates with `truncated_reason: 'max_depth'`, EPERM_ROOT outside
+    roots, ENOTDIR on file path.
+  - `tests/unit/file/read_media_file.test.ts` (+7): PNG round-trip,
+    content-type mapping (8 extensions), unknown extension → octet-
+    stream, ETOOLARGE without max_bytes, max_bytes truncate contract
+    (`truncated: true` + exact bytes_read), EPERM_ROOT, EISDIR.
+- Wave 2c refactor contributed 0 new tests (mechanical signature
+  change; tests call `*Impl` directly, not the register functions).
+
+- Smoke 57 → 66 probes (+9 in new probesV08 section): read head/tail +
+  mutex, list sort_by:'size', directory_tree happy + exclude_patterns,
+  read_media_file base64+content_type + max_bytes truncate + EISDIR.
+  All green on first run.
+
+### Out-of-scope (per backlog `backlog/v0.8-filesystem-mcp-parity.md`)
+
+- **P1 — MCP Roots protocol support.** Largest item; per backlog "should
+  be its own wave — don't bundle". Stays in the backlog for a future
+  wave.
+- **P3 — Audit log IO investigation.** Investigation rather than a fix;
+  output would be a report at `audit/investigations/` plus a follow-up
+  prompt if action warranted. Stays in backlog.
 
 ## [0.7.2] — 2026-05-22 — PowerShell wrapper hardening (H2 from v0.7.1 prompt)
 
