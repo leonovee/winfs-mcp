@@ -21,7 +21,7 @@ const WINFS = "C:\\Users\\User\\Desktop\\ai\\tools\\winfs";
 const SMOKE_DIR = path.join(WINFS, ".v07_smoke_dir");
 const SMOKE_TMP = path.join(WINFS, ".v07_smoke_tmp.txt");
 const EXPECTED_TOOL_COUNT = 37; // 30 (v0.6) + 3 (wave 1) + 4 (wave 2b)
-const EXPECTED_VERSION = "0.6.0"; // bumped to 0.7.0 in Phase E AFTER smoke
+const EXPECTED_VERSION = "0.7.0";
 
 function spawnServer(configPath) {
   const child = spawn(
