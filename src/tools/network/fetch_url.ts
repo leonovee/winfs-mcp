@@ -323,7 +323,12 @@ async function fetchOnce(p: FetchOnceArgs): Promise<FetchOnceResult | Structured
       ? {
           ...reqOpts,
           servername: p.url.hostname, // SNI uses real hostname
-          // Cert validation: Node's default checkServerIdentity uses servername.
+          // P1.2: pin cert validation as defense-in-depth. Node's default is
+          // `true`, so this is a no-op today — the point is to make the value
+          // explicit so a future runtime override (test setup, dependency
+          // side-effect, https.globalAgent reassignment) can't silently
+          // disable certificate validation for this codepath.
+          rejectUnauthorized: true,
         }
       : reqOpts;
 
