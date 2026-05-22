@@ -1543,3 +1543,90 @@ No signature change required for tools that don't use the new subsystem — they
 Documented in `CLAUDE.md` (operational), not in the spec (procedural rather than architectural). Captured here as a back-reference: external-review findings that propose blocklist-pattern changes require BOTH pre-fix verify (demonstrate the under-block via a failing test) AND post-fix smoke against legitimate use cases in the same syntactic neighborhood. The `-EncodedCommand` greedy-pattern over-block in the v0.7 pre-tag bug-fix wave (commit `2bb8a69` over-blocked `node -e` / `python -e` / `perl -e`; fix in `7b7a41c` added PowerShell-context lookahead) is the canonical example.
 
 **Wave summary.** Spec invariant set grew from #40 to #41 (+1). One new internal interface (`ToolContext`) and one register*Tool signature change (`(server, config, audit, registry?)` → `(server, ctx)`). No user-facing behaviour change. No version bump; `[Unreleased]` continues.
+
+---
+
+### 2026-05-22 — v0.9.0: MCP Roots protocol support (§AC)
+
+**Motivation.** Pre-v0.9 winfs read `allowedRoots` once at startup from `%LOCALAPPDATA%\mcp-winfs\config.json` and never updated. Every new project root required editing the file and restarting Claude Desktop — the operational pain that v0.7 hit repeatedly. The Model Context Protocol [Roots](https://modelcontextprotocol.io/docs/specification#roots) protocol lets the client signal its current project roots at connection time and via runtime `notifications/roots/list_changed`. winfs v0.9 subscribes to both.
+
+**§AC.1. Union mode (NOT replace mode).**
+
+The reference `@modelcontextprotocol/server-filesystem` *replaces* its allowed-directory list with client roots. winfs takes the safer union approach:
+
+```
+effectiveAllowedRoots = union(config.allowedRoots, clientRoots)
+```
+
+**Rationale:**
+- winfs's safety posture is "narrow by default". Union widens only when both server-side config AND client-side roots trust a path.
+- Replace mode can surprisingly *reduce* allowed access if the client doesn't know about config-supplied roots.
+- Empty client roots → config-only access (no regression vs pre-v0.9 behaviour).
+- Client roots can only WIDEN access, never silently remove paths the operator explicitly trusted via config.
+
+**§AC.2. Implementation.**
+
+New module `src/core/roots_resolver.ts` owns the live effective set. `RootsResolver` is constructed in `createServer` with a snapshot of `config.resolvedAllowedRoots`; later `setClientRoots(...)` calls compute the union (case-insensitive dedup on Windows; case-sensitive on POSIX) and mutate `config.resolvedAllowedRoots` in place via `length = 0; push(...union)`.
+
+The in-place mutation choice lets all 17 existing readers of `config.resolvedAllowedRoots` (incl. `checkAllowed`, `walkFiles`, `execute_command.cwd-default`, `list_allowed_directories`) automatically pick up the live union — no signature change to `checkAllowed`, no rewrite of any tool's `*Impl`. The previous "config is immutable post-loadConfig" convention is amended: `config.resolvedAllowedRoots` is the SOLE field with a designated mutator (`RootsResolver`). Every other reader treats the array as read-only.
+
+`ToolContext` gains `rootsResolver: RootsResolver` field (per the §AB.2 extension rule). Tools that need direct access (e.g. `list_allowed_directories` for documentation purposes) can call `ctx.rootsResolver.effective()`; most tools continue to read `config.resolvedAllowedRoots` unchanged.
+
+**§AC.3. Client-roots validation.**
+
+`setClientRoots(roots: readonly string[])` is the sole entry point. Each candidate is validated:
+
+1. Non-empty string.
+2. Absolute path (per `path.isAbsolute`).
+3. `fs.stat` succeeds (path exists).
+4. Path is a directory.
+5. `fs.realpath` resolves (defeats symlink-escape; falls back to the literal absolute form on permission errors).
+
+Invalid roots are SKIPPED with a stderr warning (`RootsResolver: rejecting <reason> client root: <path>`). Valid roots in the same batch are still applied — partial-success semantics matching the Filesystem-MCP reference. One bad client root does not poison the rest.
+
+Both the realpath-resolved form AND the literal absolute form are stored if they differ (case-insensitive on Windows) — matches the reference server's dual-path-storage pattern. Some clients pass canonicalised paths; others pass paths with symlink segments. Accepting both avoids false `EPERM_ROOT` on either form.
+
+**§AC.4. Server wiring.**
+
+In `createServer`:
+
+- `server.server.oninitialized` — fires once after the `initialize` exchange. If the client advertises `roots` capability via `server.server.getClientCapabilities()`, fire-and-forget call to `listRoots()` populates the initial client-roots set.
+- `setNotificationHandler(RootsListChangedNotificationSchema, ...)` — runtime updates re-fetch via `listRoots()`. Same path, same validation, same audit event.
+
+Only `file://` URIs are accepted. Other schemes (`http://`, custom) are logged and skipped. `fileURLToPath` from Node's `url` module handles Windows drive letters and percent-encoding correctly.
+
+Either handler failing is non-fatal: stderr message, fall back to config-only roots, server continues. The handler chain explicitly does NOT throw — degrading to config-only is always preferred over crashing the server on a transient `listRoots` failure.
+
+**§AC.5. Audit record.**
+
+Each successful `setClientRoots` emits one audit record:
+
+```jsonl
+{
+  "ts": "2026-05-22T22:38:00.000Z",
+  "tool": "_client_roots_updated",
+  "args_summary": {
+    "accepted_count": 1,
+    "rejected_count": 0,
+    "config_roots_count": 1,
+    "effective_count": 2
+  },
+  "result_status": "ok",
+  "duration_ms": 0,
+  "mode": "strict"
+}
+```
+
+**Counts only — NEVER path strings.** Including paths in the audit trail would leak the caller's directory structure into a record that may be transported to a different machine, accidentally archived, etc. The forensic value of "client signalled N new roots; M rejected" is higher than the value of the path content, especially since the live effective set is already discoverable via `list_allowed_directories`.
+
+Per the `_`-prefix convention from spec §U / `_server_start`, system-emitted audit entries use a `_` prefix to distinguish them from registered tools.
+
+**§AC.6. Capability declaration.**
+
+The server does NOT need to declare any capability to RECEIVE client roots — the client-side capability (`roots`) is what gates the protocol. winfs simply checks `getClientCapabilities()` at `oninitialized` and acts accordingly. The MCP SDK auto-fills server-side capabilities derived from registered tools; we don't override.
+
+**Invariant #42 — effective allowed roots are the union of config and client roots.**
+
+`effectiveAllowedRoots = union(config.allowedRoots, RootsResolver.clientRoots())`. Union chosen over replace for safety: client roots can only widen access, never silently remove paths the operator explicitly trusted via config. Empty client root set degrades to config-only access. Client roots validated at `setClientRoots` — absolute, existing directory, symlinks resolved per reference server's dual-path-storage pattern. Invalid roots skipped with warnings; valid ones still apply. Audit records `_client_roots_updated` events with count only, never paths. Applies to all path-bound tools through their unchanged read of `config.resolvedAllowedRoots`, which the resolver mutates in place. Generalises invariant #36 (ProcessRegistry-only shared mutable state): `config.resolvedAllowedRoots` is now also shared mutable state, but with `RootsResolver` as its single owner.
+
+**Wave summary.** Spec invariant set grew from #41 to #42 (+1). One new core module (`RootsResolver`) and one new `ToolContext` field (`rootsResolver`). The `checkAllowed` signature, all 39 register*Tool signatures, and every `*Impl` signature stay unchanged — the resolver mutates the live `config.resolvedAllowedRoots` array so existing readers automatically pick up the union. User-facing behaviour: with an MCP-Roots-aware client, paths inside client-signalled project roots are accessible without `config.json` edit + Claude Desktop restart. Version bump 0.8.0 → 0.9.0.
