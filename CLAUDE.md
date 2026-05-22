@@ -66,7 +66,7 @@
 — основная папка: `C:\Users\User\Desktop\ai\tools\winfs\` (lowercase `ai`, `tools`);
 — remote: `https://github.com/leonovee/winfs-mcp`;
 — git на Windows вызывать через абсолютный путь: `& "C:\Program Files\Git\cmd\git.exe"`;
-— у `winfs:execute_command` известный баг (P2): при вызове `& "git.exe" ...` stdout/stderr пустые, но команда выполняется. Состояние проверять через файлы (`.git/refs/heads/main`, `git status`-файл через `Start-Process -RedirectStandardOutput`).
+— у `winfs:execute_command` исторический "bug #2" из handoff #1 (P2): при вызове `& "git.exe" ...` stdout/stderr якобы пустые. **v0.7.1 (2026-05-22): расследован — на текущем сервере (Node v24, PowerShell, winfs main @ v0.7.1) баг НЕ воспроизводится.** Регрессионные тесты в `tests/unit/exec/stdout_capture.regression.test.ts` пинят инвариант: `node --version`, `& 'git.exe' --version`, `Get-Date` — все три формы корректно ловят stdout. Smoke harness (`scripts/smoke/v0.7-smoke.mjs`) тоже проверяет на wire-level. Если симптом всё-таки возникает в чат-Claude / Claude Desktop / browser-mode сессии — это **environmental** (другой MCP transport, другой winfs instance, другой PowerShell), а не дефект серверного кода. Workaround через файлы (`.git/refs/heads/main`, `Start-Process -RedirectStandardOutput`) остаётся как fallback на случай transport-side проблем.
 — `winfs` MCP-сервер иногда зависает на 4 минуты (известный баг транспорта). Перезапуск: `.\scripts\restart-winfs.ps1` (если работает) или ручной рестарт Claude Desktop через трей.
 
 ## Операционные заметки

@@ -5,8 +5,64 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
-(v0.7.1 patch wave: Windows-flaky process tests, deferred P2 review-wave
+(Future patch wave: Windows-flaky process tests, deferred P2 review-wave
 findings. See README §"Known limitations" for the deferred list.)
+
+## [0.7.1] — 2026-05-22 — bug #2 investigation + defensive coverage
+
+The v0.7.1 hotfix prompt opened on a P0 report from chat-Claude: that
+`execute_command` returns empty stdout for external .exe invocations
+(the "bug #2" operational note carried in CLAUDE.md across v0.5.1 →
+v0.6 → v0.7 without a fix for five waves).
+
+**Investigation outcome: the bug DOES NOT REPRODUCE at either the
+in-process server layer or the wire-level JSON-RPC layer on the
+current machine + Node v24 + PowerShell + winfs build.** Same pattern
+as bug #1 from the pre-tag bug-fix wave: the reported symptom is
+environmental to chat-Claude's MCP transport / winfs instance, not a
+defect in winfs source code.
+
+### Added — defensive regression coverage
+
+- **`tests/unit/exec/stdout_capture.regression.test.ts`** (+4 tests,
+  398 → 402):
+  - A1.1: `execute_command` + `node --version` captures stdout
+    matching `/^v\d+\.\d+\.\d+/`
+  - A1.2: `execute_command` + `& 'C:\Program Files\Git\cmd\git.exe'
+    --version` captures stdout matching `/^git version /` (the exact
+    historical-note form)
+  - A1.3: `execute_command` + `Get-Date` (PowerShell cmdlet) captures
+    non-empty stdout
+  - A2: `start_process` + `node --version` (cross-pipeline comparison
+    — both spawn pipelines correctly handle stdout)
+- **Two new wire-level smoke probes** in `scripts/smoke/v0.7-smoke.mjs`
+  (55 → 57 probes; `bugfix v0.7.1: execute_command stdout capture for
+  node --version` + `… for direct git path`). Both green on first run.
+
+### Changed — docs
+
+- **CLAUDE.md** — "bug #2" operational note rewritten to past-tense.
+  Notes that v0.7.1 investigated the symptom and could not reproduce
+  it at the server layer; the file-based workaround
+  (`Start-Process -RedirectStandardOutput`) is retained as a fallback
+  for any future transport-side recurrence.
+
+### Not changed — no source code fix
+
+Since the bug does not reproduce in source code, no `src/` change ships
+in v0.7.1. The defensive coverage (tests + smoke probes) ensures any
+future change that DOES break the stdout-capture contract surfaces
+immediately at the suite or the smoke wall. The historical operational
+workaround is retained as defensive guidance for operator-side issues.
+
+### Tests + smoke
+
+- 398 → 402 passing (+4 reproducer tests; excluding the 10
+  pre-existing Windows-flaky `tests/unit/process/*` tests carried over
+  from v0.7.0)
+- Smoke 55/57 → 57/57 green (+2 stdout-capture probes)
+
+
 
 ## [0.7.0] — 2026-05-22 — DC-parity wave
 
