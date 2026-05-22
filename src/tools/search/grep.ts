@@ -10,6 +10,7 @@ import { resolveTimeoutMs } from "../../core/timeouts.js";
 import { compileGlob, matchGlob, GlobCompileError } from "../../core/glob.js";
 import { walkFiles } from "../../core/walk.js";
 import { tryDecodeUtf8Strict, looksBinary } from "../../core/utf8.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_MATCHES_HARD_CAP = 500;
 const MAX_MATCHES_DEFAULT = 50;
@@ -334,7 +335,8 @@ export async function grepImpl(
   });
 }
 
-export function registerGrepTool(server: McpServer, config: ResolvedConfig): void {
+export function registerGrepTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "grep",
     {

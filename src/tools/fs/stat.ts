@@ -6,6 +6,7 @@ import { checkAllowed } from "../../core/allowed_roots.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { ok, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = { path: AbsolutePath } as const;
 
@@ -58,7 +59,8 @@ export async function statImpl(args: Input, config: ResolvedConfig): Promise<Res
   }
 }
 
-export function registerStatTool(server: McpServer, config: ResolvedConfig): void {
+export function registerStatTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "stat",
     {

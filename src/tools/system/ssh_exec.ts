@@ -5,6 +5,7 @@ import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { spawnSubprocess } from "../../core/exec_safety.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const DEFAULT_TIMEOUT_S = 30;
 const MAX_TIMEOUT_S = 300;
@@ -230,7 +231,8 @@ export async function sshExecImpl(
   return ok(value);
 }
 
-export function registerSshExecTool(server: McpServer, config: ResolvedConfig): void {
+export function registerSshExecTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "ssh_exec",
     {

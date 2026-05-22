@@ -4,6 +4,7 @@ import type { ResolvedConfig } from "../../core/config.js";
 import type { ProcessRegistry, SessionSummary } from "../../core/process_registry.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { ok, type Result } from "../../core/errors.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {} as const;
 export const InputSchema = z.object(InputShape).strict();
@@ -46,11 +47,8 @@ export async function listProcessImpl(
   return ok({ sessions, total: sessions.length });
 }
 
-export function registerListProcessTool(
-  server: McpServer,
-  config: ResolvedConfig,
-  registry: ProcessRegistry,
-): void {
+export function registerListProcessTool(server: McpServer, ctx: ToolContext): void {
+  const { config, registry } = ctx;
   server.registerTool(
     "list_process",
     {

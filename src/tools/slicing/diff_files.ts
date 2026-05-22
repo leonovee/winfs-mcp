@@ -9,6 +9,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { tryDecodeUtf8Strict, looksBinary } from "../../core/utf8.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_CONTEXT_LINES = 10;
 const MAX_MINIMAL_LINES = 20;
@@ -201,7 +202,8 @@ export async function diffFilesImpl(
   });
 }
 
-export function registerDiffFilesTool(server: McpServer, config: ResolvedConfig): void {
+export function registerDiffFilesTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "diff_files",
     {

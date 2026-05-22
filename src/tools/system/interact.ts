@@ -4,6 +4,7 @@ import type { ResolvedConfig } from "../../core/config.js";
 import type { ProcessRegistry } from "../../core/process_registry.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_WAIT_MS = 60_000;
 const DEFAULT_WAIT_MS = 5_000;
@@ -134,11 +135,8 @@ export async function interactImpl(
   });
 }
 
-export function registerInteractTool(
-  server: McpServer,
-  config: ResolvedConfig,
-  registry: ProcessRegistry,
-): void {
+export function registerInteractTool(server: McpServer, ctx: ToolContext): void {
+  const { config, registry } = ctx;
   server.registerTool(
     "interact",
     {

@@ -10,6 +10,7 @@ import * as execSafety from "../../core/exec_safety.js";
 import { resolveTimeoutMs } from "../../core/timeouts.js";
 import { diagnoseHints } from "../../core/exec_hints.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_COMMAND_LEN = 8 * 1024;
 const MAX_ARGS_LEN = 64;
@@ -210,7 +211,8 @@ export async function executeCommandImpl(
   return ok(value);
 }
 
-export function registerExecuteCommandTool(server: McpServer, config: ResolvedConfig): void {
+export function registerExecuteCommandTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "execute_command",
     {

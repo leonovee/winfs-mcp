@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { ok, type Result } from "../../core/errors.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 /**
  * SAFE_PREFIX_LEN is the spec §2 invariant #8 mathematical bound: the
@@ -66,7 +67,8 @@ export async function checkEnvImpl(
   });
 }
 
-export function registerCheckEnvTool(server: McpServer, config: ResolvedConfig): void {
+export function registerCheckEnvTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "check_env",
     {

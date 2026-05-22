@@ -4,6 +4,7 @@ import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { ok, type Result } from "../../core/errors.js";
 import { sanitizedPathDirs } from "../../core/exec_safety.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {} as const;
 
@@ -28,7 +29,8 @@ export async function listPathDirsImpl(
   return ok({ path_dirs: dirs, total: dirs.length });
 }
 
-export function registerListPathDirsTool(server: McpServer, config: ResolvedConfig): void {
+export function registerListPathDirsTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "list_path_dirs",
     {

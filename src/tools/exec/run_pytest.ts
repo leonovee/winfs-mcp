@@ -7,6 +7,7 @@ import { checkAllowed } from "../../core/allowed_roots.js";
 import { spawnSubprocess, resolvePython } from "../../core/exec_safety.js";
 import { resolveTimeoutMs } from "../../core/timeouts.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   cwd: AbsolutePath.describe("Directory pytest runs in (must be inside allowedRoots)."),
@@ -168,7 +169,8 @@ export async function runPytestImpl(
   });
 }
 
-export function registerRunPytestTool(server: McpServer, config: ResolvedConfig): void {
+export function registerRunPytestTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "run_pytest",
     {

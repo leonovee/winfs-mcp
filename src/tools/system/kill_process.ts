@@ -4,6 +4,7 @@ import type { ResolvedConfig } from "../../core/config.js";
 import type { ProcessRegistry } from "../../core/process_registry.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   session_id: z.string().min(1),
@@ -73,11 +74,8 @@ export async function killProcessImpl(
   });
 }
 
-export function registerKillProcessTool(
-  server: McpServer,
-  config: ResolvedConfig,
-  registry: ProcessRegistry,
-): void {
+export function registerKillProcessTool(server: McpServer, ctx: ToolContext): void {
+  const { config, registry } = ctx;
   server.registerTool(
     "kill_process",
     {

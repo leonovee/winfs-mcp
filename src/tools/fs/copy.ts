@@ -7,6 +7,7 @@ import { checkAllowed } from "../../core/allowed_roots.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, fromNodeError, type Result, type StructuredError } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   src: AbsolutePath.describe("Source file or directory inside allowedRoots."),
@@ -210,7 +211,8 @@ export async function copyImpl(
   return ok(value);
 }
 
-export function registerCopyTool(server: McpServer, config: ResolvedConfig): void {
+export function registerCopyTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "copy",
     {

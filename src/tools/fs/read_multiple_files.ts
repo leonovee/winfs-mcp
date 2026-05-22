@@ -6,6 +6,7 @@ import { ok, type Result, type StructuredError } from "../../core/errors.js";
 import { withTimeout, resolveTimeoutMs } from "../../core/timeouts.js";
 import { AbsolutePath, LineRange } from "../../schemas/common.js";
 import { readImpl } from "./read.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   paths: z
@@ -136,10 +137,8 @@ export async function readMultipleFilesImpl(
   });
 }
 
-export function registerReadMultipleFilesTool(
-  server: McpServer,
-  config: ResolvedConfig,
-): void {
+export function registerReadMultipleFilesTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "read_multiple_files",
     {

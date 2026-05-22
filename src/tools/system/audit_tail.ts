@@ -5,6 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result, type StructuredError } from "../../core/errors.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const HARD_CAP = 500;
 const DEFAULT_N = 50;
@@ -477,7 +478,8 @@ export async function auditTailImpl(
   return ok({ entries, total: entries.length, entries_seen_total: scanned });
 }
 
-export function registerAuditTailTool(server: McpServer, config: ResolvedConfig): void {
+export function registerAuditTailTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "audit_tail",
     {

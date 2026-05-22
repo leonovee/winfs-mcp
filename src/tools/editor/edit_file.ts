@@ -9,6 +9,7 @@ import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js
 import { tryDecodeUtf8Strict, looksBinary } from "../../core/utf8.js";
 import { atomicWriteFile } from "../../core/atomic_write.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_EDITS = 50;
 const DEFAULT_CONTEXT = 3;
@@ -261,7 +262,8 @@ export async function editFileImpl(
   return ok(value);
 }
 
-export function registerEditFileTool(server: McpServer, config: ResolvedConfig): void {
+export function registerEditFileTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "edit_file",
     {

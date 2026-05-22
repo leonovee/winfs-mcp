@@ -7,6 +7,7 @@ import { checkAllowed } from "../../core/allowed_roots.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   path: AbsolutePath,
@@ -146,7 +147,8 @@ export async function listImpl(args: Input, config: ResolvedConfig): Promise<Res
   return ok({ entries, total: entries.length });
 }
 
-export function registerListTool(server: McpServer, config: ResolvedConfig): void {
+export function registerListTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "list",
     {

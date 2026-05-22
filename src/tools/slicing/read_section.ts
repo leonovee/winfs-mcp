@@ -7,6 +7,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { tryDecodeUtf8Strict, decodeUtf8StripBom, hasUtf8Bom } from "../../core/utf8.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   path: AbsolutePath,
@@ -252,7 +253,8 @@ export async function readSectionImpl(
   });
 }
 
-export function registerReadSectionTool(server: McpServer, config: ResolvedConfig): void {
+export function registerReadSectionTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "read_section",
     {

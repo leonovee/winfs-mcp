@@ -7,6 +7,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
 import { copyImpl } from "./copy.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   src: AbsolutePath.describe("Source path inside allowedRoots (must exist)."),
@@ -132,7 +133,8 @@ export async function moveImpl(
   }
 }
 
-export function registerMoveTool(server: McpServer, config: ResolvedConfig): void {
+export function registerMoveTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "move",
     {

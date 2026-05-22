@@ -11,6 +11,7 @@ import {
   tryDecodeUtf8Strict,
 } from "../../core/utf8.js";
 import { AbsolutePath, LineRange } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   path: AbsolutePath,
@@ -139,7 +140,8 @@ export async function readImpl(args: Input, config: ResolvedConfig): Promise<Res
   });
 }
 
-export function registerReadTool(server: McpServer, config: ResolvedConfig): void {
+export function registerReadTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "read",
     {

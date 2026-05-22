@@ -9,6 +9,7 @@ import { atomicWriteFile } from "../../core/atomic_write.js";
 import { encodeUtf8NoBom } from "../../core/utf8.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   path: AbsolutePath,
@@ -150,7 +151,8 @@ export async function writeJsonImpl(
   });
 }
 
-export function registerWriteJsonTool(server: McpServer, config: ResolvedConfig): void {
+export function registerWriteJsonTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "write_json",
     {

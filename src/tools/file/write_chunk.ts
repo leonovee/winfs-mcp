@@ -6,6 +6,7 @@ import { checkAllowed } from "../../core/allowed_roots.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const AUDIT_PREFIX_CAP = 256;
 
@@ -237,7 +238,8 @@ export async function writeChunkImpl(
   return ok(value);
 }
 
-export function registerWriteChunkTool(server: McpServer, config: ResolvedConfig): void {
+export function registerWriteChunkTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "write_chunk",
     {

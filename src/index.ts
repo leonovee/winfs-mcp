@@ -30,17 +30,19 @@ async function main(): Promise<void> {
     );
   }
 
-  const { server, registry } = createServer(config);
+  const { server, ctx } = createServer(config);
 
   // v0.7 wave 2b: SIGINT/SIGTERM handler drains the process registry so any
   // children we spawned via start_process are SIGKILL'd before the server
-  // exits. 10 s hard deadline inside registry.shutdown().
+  // exits. 10 s hard deadline inside registry.shutdown(). Wave 2c moved
+  // registry behind ctx so future stateful subsystems plug into the same
+  // shutdown hook from `ctx.<subsystem>.shutdown()`.
   let shuttingDown = false;
   const onShutdown = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     process.stderr.write(`mcp-winfs received ${signal}, shutting down…\n`);
-    registry
+    ctx.registry
       .shutdown()
       .catch(() => {
         /* swallow: best-effort drain */

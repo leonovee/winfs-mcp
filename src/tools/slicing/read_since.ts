@@ -7,6 +7,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { tryDecodeUtf8Strict } from "../../core/utf8.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const DEFAULT_MAX_BYTES = 64 * 1024;
 const HARD_CAP_BYTES = 1024 * 1024;
@@ -193,7 +194,8 @@ export async function readSinceImpl(
   });
 }
 
-export function registerReadSinceTool(server: McpServer, config: ResolvedConfig): void {
+export function registerReadSinceTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "read_since",
     {

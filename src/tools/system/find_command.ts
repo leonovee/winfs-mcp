@@ -5,6 +5,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import { spawnSubprocess } from "../../core/exec_safety.js";
 import { resolveTimeoutMs } from "../../core/timeouts.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   name: z
@@ -112,7 +113,8 @@ export async function findCommandImpl(
   };
 }
 
-export function registerFindCommandTool(server: McpServer, config: ResolvedConfig): void {
+export function registerFindCommandTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "find_command",
     {

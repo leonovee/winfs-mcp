@@ -8,6 +8,7 @@ import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result, type StructuredError } from "../../core/errors.js";
 import { resolveTimeoutMs } from "../../core/timeouts.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_REDIRECTS = 3;
 const ALLOWED_HEADERS = new Set([
@@ -540,7 +541,8 @@ export async function fetchUrlImpl(
   }
 }
 
-export function registerFetchUrlTool(server: McpServer, config: ResolvedConfig): void {
+export function registerFetchUrlTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "fetch_url",
     {

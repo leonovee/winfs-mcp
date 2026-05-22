@@ -5,6 +5,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result, type StructuredError } from "../../core/errors.js";
 import { checkGitArgsReadOnly, checkPathFilter, resolveGitRepo, spawnGit } from "../../core/git_safety.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const DEFAULT_COUNT = 20;
 const MAX_COUNT = 200;
@@ -147,7 +148,8 @@ export async function gitLogImpl(
   return ok({ commits, total: commits.length });
 }
 
-export function registerGitLogTool(server: McpServer, config: ResolvedConfig): void {
+export function registerGitLogTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "git_log",
     {

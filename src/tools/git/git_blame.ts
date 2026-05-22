@@ -6,6 +6,7 @@ import { buildError, ok, type Result, type StructuredError } from "../../core/er
 import { checkAllowed } from "../../core/allowed_roots.js";
 import { resolveGitRepo, spawnGit } from "../../core/git_safety.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_RANGE_LINES = 10000;
 
@@ -157,7 +158,8 @@ export async function gitBlameImpl(
   return ok({ blame, total: blame.length });
 }
 
-export function registerGitBlameTool(server: McpServer, config: ResolvedConfig): void {
+export function registerGitBlameTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "git_blame",
     {

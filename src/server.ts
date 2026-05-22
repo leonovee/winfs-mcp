@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "./core/config.js";
 import { ProcessRegistry } from "./core/process_registry.js";
+import { createToolContext, type ToolContext } from "./core/tool_context.js";
 import { registerReadTool } from "./tools/fs/read.js";
 import { registerWriteTool } from "./tools/fs/write.js";
 import { registerAppendTool } from "./tools/fs/append.js";
@@ -39,9 +40,17 @@ import { registerStartProcessTool } from "./tools/system/start_process.js";
 import { registerInteractTool } from "./tools/system/interact.js";
 import { registerKillProcessTool } from "./tools/system/kill_process.js";
 
+/**
+ * v0.7 wave 2c: `createServer` returns the McpServer plus the `ToolContext`
+ * that holds every stateful subsystem (config, ProcessRegistry, …).
+ * Callers reach the registry via `result.ctx.registry`.
+ *
+ * Prior shape `{ server, registry }` is gone — every subsystem accessor goes
+ * through `ctx` so future state additions don't churn the return type.
+ */
 export interface CreatedServer {
   server: McpServer;
-  registry: ProcessRegistry;
+  ctx: ToolContext;
 }
 
 export function createServer(config: ResolvedConfig): CreatedServer {
@@ -49,67 +58,73 @@ export function createServer(config: ResolvedConfig): CreatedServer {
     name: "mcp-winfs",
     version: config.version,
   });
-  // v0.7 wave 2b: ProcessRegistry is the first long-lived shared mutable
-  // state. Construction starts the GC sweep; shutdown() must be called on
-  // SIGINT/SIGTERM (wired in src/index.ts).
+  // ProcessRegistry is the first long-lived shared mutable state (invariant
+  // #36). Construction starts the GC sweep; shutdown() must be called on
+  // SIGINT/SIGTERM (wired in src/index.ts via ctx.registry.shutdown()).
   const registry = new ProcessRegistry(config);
 
+  // ToolContext consolidates per-server state. Every register*Tool accepts
+  // the whole context — extending it (e.g. FileWatchRegistry, JobQueue) adds
+  // a field, not a positional parameter. See spec §AB.2 and the extension
+  // rule there.
+  const ctx = createToolContext({ config, registry });
+
   // v0.1 core
-  registerReadTool(server, config);
-  registerWriteTool(server, config);
-  registerAppendTool(server, config);
-  registerListTool(server, config);
-  registerStatTool(server, config);
+  registerReadTool(server, ctx);
+  registerWriteTool(server, ctx);
+  registerAppendTool(server, ctx);
+  registerListTool(server, ctx);
+  registerStatTool(server, ctx);
 
   // v0.2 mutations + batch + introspection
-  registerListAllowedDirectoriesTool(server, config);
-  registerMkdirTool(server, config);
-  registerMoveTool(server, config);
-  registerCopyTool(server, config);
-  registerReadMultipleFilesTool(server, config);
+  registerListAllowedDirectoriesTool(server, ctx);
+  registerMkdirTool(server, ctx);
+  registerMoveTool(server, ctx);
+  registerCopyTool(server, ctx);
+  registerReadMultipleFilesTool(server, ctx);
 
   // v0.3 search + self-recovery
-  registerGlobTool(server, config);
-  registerReadJsonTool(server, config);
-  registerGrepTool(server, config);
-  registerAuditTailTool(server, config);
+  registerGlobTool(server, ctx);
+  registerReadJsonTool(server, ctx);
+  registerGrepTool(server, ctx);
+  registerAuditTailTool(server, ctx);
 
   // v0.4 editor + slicing
-  registerReadSectionTool(server, config);
-  registerDiffFilesTool(server, config);
-  registerReadSinceTool(server, config);
-  registerEditFileTool(server, config);
+  registerReadSectionTool(server, ctx);
+  registerDiffFilesTool(server, ctx);
+  registerReadSinceTool(server, ctx);
+  registerEditFileTool(server, ctx);
 
   // v0.5 git read-only
-  registerGitStatusTool(server, config);
-  registerGitLogTool(server, config);
-  registerGitShowTool(server, config);
-  registerGitDiffTool(server, config);
-  registerGitBlameTool(server, config);
+  registerGitStatusTool(server, ctx);
+  registerGitLogTool(server, ctx);
+  registerGitShowTool(server, ctx);
+  registerGitDiffTool(server, ctx);
+  registerGitBlameTool(server, ctx);
 
   // v0.5 exec
-  registerExecuteCommandTool(server, config);
-  registerRunPythonTool(server, config);
-  registerRunPytestTool(server, config);
+  registerExecuteCommandTool(server, ctx);
+  registerRunPythonTool(server, ctx);
+  registerRunPytestTool(server, ctx);
 
   // v0.5 system + network
-  registerFindCommandTool(server, config);
-  registerCheckEnvTool(server, config);
-  registerFetchUrlTool(server, config);
+  registerFindCommandTool(server, ctx);
+  registerCheckEnvTool(server, ctx);
+  registerFetchUrlTool(server, ctx);
 
   // v0.6 file — byte-offset surgical writes (NOT atomic)
-  registerWriteChunkTool(server, config);
+  registerWriteChunkTool(server, ctx);
 
   // v0.7 wave 1 — consumer-agent feedback adds
-  registerListPathDirsTool(server, config);
-  registerWriteJsonTool(server, config);
-  registerSshExecTool(server, config);
+  registerListPathDirsTool(server, ctx);
+  registerWriteJsonTool(server, ctx);
+  registerSshExecTool(server, ctx);
 
-  // v0.7 wave 2b — process control suite
-  registerListProcessTool(server, config, registry);
-  registerStartProcessTool(server, config, registry);
-  registerInteractTool(server, config, registry);
-  registerKillProcessTool(server, config, registry);
+  // v0.7 wave 2b — process control suite (uses ctx.registry)
+  registerListProcessTool(server, ctx);
+  registerStartProcessTool(server, ctx);
+  registerInteractTool(server, ctx);
+  registerKillProcessTool(server, ctx);
 
-  return { server, registry };
+  return { server, ctx };
 }

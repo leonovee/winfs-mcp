@@ -7,6 +7,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import { compileGlob, matchGlob, GlobCompileError } from "../../core/glob.js";
 import { walkFiles } from "../../core/walk.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const HARD_CAP = 2000;
 const DEFAULT_MAX = 200;
@@ -78,7 +79,8 @@ export async function globImpl(
   return ok({ matches, total: matches.length, truncated });
 }
 
-export function registerGlobTool(server: McpServer, config: ResolvedConfig): void {
+export function registerGlobTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "glob",
     {

@@ -8,6 +8,7 @@ import { atomicAppend } from "../../core/atomic_write.js";
 import { encodeUtf8NoBom } from "../../core/utf8.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   path: AbsolutePath,
@@ -57,7 +58,8 @@ export async function appendImpl(args: Input, config: ResolvedConfig): Promise<R
   });
 }
 
-export function registerAppendTool(server: McpServer, config: ResolvedConfig): void {
+export function registerAppendTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "append",
     {

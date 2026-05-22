@@ -9,6 +9,7 @@ import { atomicWriteFile } from "../../core/atomic_write.js";
 import { encodeUtf8NoBom } from "../../core/utf8.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   path: AbsolutePath,
@@ -92,7 +93,8 @@ export async function writeImpl(args: Input, config: ResolvedConfig): Promise<Re
   });
 }
 
-export function registerWriteTool(server: McpServer, config: ResolvedConfig): void {
+export function registerWriteTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "write",
     {

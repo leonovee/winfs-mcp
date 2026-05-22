@@ -8,6 +8,7 @@ import { buildError, ok, type Result } from "../../core/errors.js";
 import { checkAllowed } from "../../core/allowed_roots.js";
 import { checkExecBlocklist } from "../../core/exec_safety.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_TIMEOUT_SECONDS = 3600;
 const DEFAULT_TIMEOUT_SECONDS = 300;
@@ -138,11 +139,8 @@ export async function startProcessImpl(
   return ok(value);
 }
 
-export function registerStartProcessTool(
-  server: McpServer,
-  config: ResolvedConfig,
-  registry: ProcessRegistry,
-): void {
+export function registerStartProcessTool(server: McpServer, ctx: ToolContext): void {
+  const { config, registry } = ctx;
   server.registerTool(
     "start_process",
     {

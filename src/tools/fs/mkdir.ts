@@ -6,6 +6,7 @@ import { checkAllowed } from "../../core/allowed_roots.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   path: AbsolutePath,
@@ -70,7 +71,8 @@ export async function mkdirImpl(
   return ok({ created: true, path: realPath });
 }
 
-export function registerMkdirTool(server: McpServer, config: ResolvedConfig): void {
+export function registerMkdirTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "mkdir",
     {

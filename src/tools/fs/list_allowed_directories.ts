@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { ok, type Result } from "../../core/errors.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {} as const;
 export const InputSchema = z.object(InputShape).strict();
@@ -33,10 +34,8 @@ export async function listAllowedDirectoriesImpl(
   });
 }
 
-export function registerListAllowedDirectoriesTool(
-  server: McpServer,
-  config: ResolvedConfig,
-): void {
+export function registerListAllowedDirectoriesTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "list_allowed_directories",
     {

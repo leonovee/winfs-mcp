@@ -8,6 +8,7 @@ import { checkAllowed } from "../../core/allowed_roots.js";
 import { spawnSubprocess, resolvePython } from "../../core/exec_safety.js";
 import { resolveTimeoutMs } from "../../core/timeouts.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   mode: z
@@ -184,7 +185,8 @@ export async function runPythonImpl(
   return ok(value);
 }
 
-export function registerRunPythonTool(server: McpServer, config: ResolvedConfig): void {
+export function registerRunPythonTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "run_python",
     {

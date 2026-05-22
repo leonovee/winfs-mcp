@@ -5,6 +5,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result, type StructuredError } from "../../core/errors.js";
 import { checkGitArgsReadOnly, checkPathFilter, resolveGitRepo, spawnGit } from "../../core/git_safety.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   repo_path: AbsolutePath,
@@ -147,7 +148,8 @@ export async function gitShowImpl(
   return ok({ ...parsed, truncated });
 }
 
-export function registerGitShowTool(server: McpServer, config: ResolvedConfig): void {
+export function registerGitShowTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "git_show",
     {

@@ -5,6 +5,7 @@ import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import { readImpl } from "../fs/read.js";
 import { AbsolutePath } from "../../schemas/common.js";
+import type { ToolContext } from "../../core/tool_context.js";
 
 const InputShape = {
   path: AbsolutePath,
@@ -86,7 +87,8 @@ export async function readJsonImpl(
   return ok({ data, size_bytes: inner.value.bytes_returned });
 }
 
-export function registerReadJsonTool(server: McpServer, config: ResolvedConfig): void {
+export function registerReadJsonTool(server: McpServer, ctx: ToolContext): void {
+  const { config } = ctx;
   server.registerTool(
     "read_json",
     {
