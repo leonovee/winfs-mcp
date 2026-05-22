@@ -16,6 +16,22 @@ import type { ToolContext } from "../../core/tool_context.js";
 const InputShape = {
   path: AbsolutePath,
   range: LineRange.optional(),
+  head: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "Return only the FIRST N lines. Convenience shorthand equivalent to `range: [1, N]`. Mutually exclusive with `tail` and `range`.",
+    ),
+  tail: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "Return only the LAST N lines. Convenience shorthand for log-inspection. Mutually exclusive with `head` and `range`.",
+    ),
   max_bytes: z
     .number()
     .int()
@@ -42,6 +58,19 @@ interface ReadResult extends Record<string, unknown> {
 }
 
 export async function readImpl(args: Input, config: ResolvedConfig): Promise<Result<ReadResult>> {
+  // v0.8: `head` / `tail` / `range` are mutually exclusive — at most one.
+  const selectorCount =
+    (args.range !== undefined ? 1 : 0) +
+    (args.head !== undefined ? 1 : 0) +
+    (args.tail !== undefined ? 1 : 0);
+  if (selectorCount > 1) {
+    return buildError(
+      "EINVAL",
+      "at most one of `range`, `head`, `tail` may be specified",
+      { details: { has_range: args.range !== undefined, has_head: args.head !== undefined, has_tail: args.tail !== undefined } },
+    );
+  }
+
   const check = await checkAllowed(args.path, config);
   if ("ok" in check && check.ok === false) return check;
   const realPath = (check as { realPath: string }).realPath;
@@ -60,10 +89,11 @@ export async function readImpl(args: Input, config: ResolvedConfig): Promise<Res
   }
 
   const maxBytes = args.max_bytes ?? config.readMaxBytes;
-  if (stat.size > maxBytes && !args.range) {
+  const hasSelector = args.range !== undefined || args.head !== undefined || args.tail !== undefined;
+  if (stat.size > maxBytes && !hasSelector) {
     return buildError("ETOOLARGE", `File exceeds max_bytes`, {
       details: { path: realPath, size: stat.size, max_bytes: maxBytes },
-      hint: `Pass range:[start,end] or raise max_bytes (current limit ${maxBytes}).`,
+      hint: `Pass range:[start,end] / head:N / tail:N, or raise max_bytes (current limit ${maxBytes}).`,
     });
   }
 
@@ -92,8 +122,23 @@ export async function readImpl(args: Input, config: ResolvedConfig): Promise<Res
   let truncated = false;
   let linesReturned: number;
 
+  // v0.8: head / tail compose to the existing range path. head:N → range [1,N].
+  // tail:N → range [max(1, totalLines - N + 1), totalLines]. Both pass through
+  // the same range-slicing + byte-cap logic so behaviour is identical to an
+  // explicit range with the same end coordinates.
+  let effectiveRange: [number, number] | undefined;
   if (args.range) {
-    const [start, end] = args.range;
+    effectiveRange = args.range;
+  } else if (args.head !== undefined) {
+    effectiveRange = [1, args.head];
+  } else if (args.tail !== undefined) {
+    const totalLines = text.split(/\r?\n/).length;
+    const start = Math.max(1, totalLines - args.tail + 1);
+    effectiveRange = [start, totalLines];
+  }
+
+  if (effectiveRange) {
+    const [start, end] = effectiveRange;
     const lines = text.split(/\r?\n/);
     const clampedEnd = Math.min(end, lines.length);
     if (start > lines.length) {
@@ -151,7 +196,11 @@ export function registerReadTool(server: McpServer, ctx: ToolContext): void {
 Args:
   - path (string): Absolute path inside allowedRoots
   - range ([number, number], optional): [start_line, end_line], 1-based inclusive
+  - head (number, optional): return first N lines (= range [1, N])
+  - tail (number, optional): return last N lines (log-inspection shortcut)
   - max_bytes (number, optional): byte cap, default ${config.readMaxBytes}
+
+\`range\` / \`head\` / \`tail\` are mutually exclusive — at most one. Passing two → EINVAL.
 
 Returns: { content, lines_returned, bytes_returned, truncated }
 
