@@ -27,10 +27,19 @@ export const DEFAULT_EXEC_BLOCKLIST: readonly string[] = [
   // PowerShell payload past every other blocklist pattern (the destructive
   // verbs are encoded in base64; the literal patterns never match). Block
   // every prefix PowerShell accepts: `-e`, `-en`, `-enc`, …, `-EncodedCommand`.
-  // Pattern is case-insensitive (compiled with `i` flag). Explicit-alternation
-  // form is chosen over `-e\\w{0,14}` to avoid over-blocking `-ExecutionPolicy`
-  // or `-Examine` which start with `-e` but are not the encoded-command path.
-  "(?:^|\\s)-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\\s",
+  //
+  // The pattern uses a lookahead to require `powershell` or `pwsh`
+  // (optionally `.exe`) to appear ANYWHERE in the composed string. Anchoring
+  // on the PowerShell context is essential: without it, the pattern would
+  // over-block legitimate `node -e "..."`, `python -e ...`, etc. that share
+  // the same short-flag spelling but are not the encoded-command attack
+  // path. The composed string for execute_command is
+  // `command + args.join(" ")`, so a caller targeting PowerShell will
+  // always have `powershell` / `pwsh` in the string somewhere.
+  //
+  // Pattern compiled case-insensitive (i flag), so PowerShell / POWERSHELL /
+  // pwsh all match.
+  "(?=.*\\b(?:powershell|pwsh)(?:\\.exe)?\\b).*\\s-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)(?:\\s|$)",
   // Disk / partition operations
   "format\\s+[A-Za-z]:",
   "Format-Volume",

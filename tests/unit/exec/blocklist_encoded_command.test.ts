@@ -69,4 +69,25 @@ describe("verify-first: execute_command blocklist -EncodedCommand bypass (P1.1)"
     const blocked = checkExecBlocklist("powershell -Command 'Get-Date'", config);
     expect(blocked).toBeUndefined();
   });
+
+  // The blocklist regex requires PowerShell context to fire. Tests below pin
+  // the no-over-block invariant: `-e` flags in other binaries (node, python,
+  // perl, etc.) must NOT match. Without the PowerShell-anchor lookahead
+  // these would over-block and break legitimate workflows (e.g. node -e
+  // smoke harness probes).
+
+  it("node -e \"console.log('hi')\" stays unblocked (different binary, same flag)", () => {
+    const blocked = checkExecBlocklist("node -e \"console.log('hi')\"", config);
+    expect(blocked).toBeUndefined();
+  });
+
+  it("python -e ... stays unblocked", () => {
+    const blocked = checkExecBlocklist("python -e print(1)", config);
+    expect(blocked).toBeUndefined();
+  });
+
+  it("perl -e ... stays unblocked", () => {
+    const blocked = checkExecBlocklist("perl -e 'print 1'", config);
+    expect(blocked).toBeUndefined();
+  });
 });
