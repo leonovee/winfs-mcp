@@ -1,6 +1,9 @@
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { RootsListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { ResolvedConfig } from "./core/config.js";
 import { ProcessRegistry } from "./core/process_registry.js";
+import { RootsResolver } from "./core/roots_resolver.js";
 import { createToolContext, type ToolContext } from "./core/tool_context.js";
 import { registerReadTool } from "./tools/fs/read.js";
 import { registerWriteTool } from "./tools/fs/write.js";
@@ -56,20 +59,108 @@ export interface CreatedServer {
 }
 
 export function createServer(config: ResolvedConfig): CreatedServer {
-  const server = new McpServer({
-    name: "mcp-winfs",
-    version: config.version,
-  });
+  const server = new McpServer(
+    {
+      name: "mcp-winfs",
+      version: config.version,
+    },
+    {
+      // v0.9 §AC: announce that this server can subscribe to MCP Roots
+      // (the client capability we care about is `roots.listChanged`).
+      // The capability key here is what we OFFER as a server; the
+      // listRoots() / roots.list_changed subscriber are what we CONSUME.
+      // The SDK auto-fills any server-side capabilities our registered
+      // tools imply; we don't need to declare them explicitly here.
+      capabilities: {},
+    },
+  );
   // ProcessRegistry is the first long-lived shared mutable state (invariant
   // #36). Construction starts the GC sweep; shutdown() must be called on
   // SIGINT/SIGTERM (wired in src/index.ts via ctx.registry.shutdown()).
   const registry = new ProcessRegistry(config);
 
+  // v0.9 §AC: RootsResolver owns the effective allowedRoots set during
+  // the server's lifetime — config roots ∪ client roots from MCP Roots.
+  // Construction snapshots config.resolvedAllowedRoots; later
+  // setClientRoots calls (from the oninitialized + list_changed
+  // handlers below) mutate the live config field via the resolver's
+  // in-place push pattern. checkAllowed continues to read
+  // config.resolvedAllowedRoots — automatically picks up the union.
+  const rootsResolver = new RootsResolver(config);
+
   // ToolContext consolidates per-server state. Every register*Tool accepts
   // the whole context — extending it (e.g. FileWatchRegistry, JobQueue) adds
   // a field, not a positional parameter. See spec §AB.2 and the extension
   // rule there.
-  const ctx = createToolContext({ config, registry });
+  const ctx = createToolContext({ config, registry, rootsResolver });
+
+  // v0.9 §AC: MCP Roots wiring.
+  //
+  // (a) `oninitialized` fires once after `initialize` exchange completes.
+  //     If the client advertised the `roots` capability, fetch their
+  //     initial list via listRoots() and feed into the resolver.
+  // (b) `roots/list_changed` notifications during the session refresh
+  //     the resolver via the same path. Either handler failure logs
+  //     to stderr but never throws past the wrapper — we degrade to
+  //     config-only roots, never crash the server.
+  //
+  // Only `file://` URIs are accepted; other schemes logged + skipped.
+  const refreshRootsFromClient = async (source: string): Promise<void> => {
+    try {
+      const response = await server.server.listRoots();
+      if (!response || !("roots" in response) || !Array.isArray(response.roots)) {
+        process.stderr.write(`MCP Roots ${source}: empty / malformed response\n`);
+        return;
+      }
+      const fileRoots: string[] = [];
+      const skipped: string[] = [];
+      for (const r of response.roots) {
+        const uri = r?.uri;
+        if (typeof uri !== "string") continue;
+        if (uri.startsWith("file://")) {
+          try {
+            fileRoots.push(fileURLToPath(uri));
+          } catch (e) {
+            skipped.push(`${uri} (parse failed: ${(e as Error).message})`);
+          }
+        } else {
+          skipped.push(uri);
+        }
+      }
+      if (skipped.length > 0) {
+        process.stderr.write(
+          `MCP Roots ${source}: skipping ${skipped.length} non-file URI(s)\n`,
+        );
+      }
+      await rootsResolver.setClientRoots(fileRoots);
+      process.stderr.write(
+        `MCP Roots ${source}: ${fileRoots.length} root(s) accepted, ${skipped.length} skipped\n`,
+      );
+    } catch (err) {
+      process.stderr.write(
+        `MCP Roots ${source} failed: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  };
+
+  server.server.oninitialized = (): void => {
+    const caps = server.server.getClientCapabilities();
+    if (caps?.roots) {
+      // Fire-and-forget; refreshRootsFromClient handles its own errors.
+      void refreshRootsFromClient("initial fetch");
+    } else {
+      process.stderr.write(
+        "MCP Roots: client did not advertise `roots` capability — config-only allowedRoots\n",
+      );
+    }
+  };
+
+  server.server.setNotificationHandler(
+    RootsListChangedNotificationSchema,
+    async () => {
+      await refreshRootsFromClient("list_changed");
+    },
+  );
 
   // v0.1 core
   registerReadTool(server, ctx);
