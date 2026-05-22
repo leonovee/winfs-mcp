@@ -561,8 +561,47 @@ async function probesWave2b(srv) {
 async function probesBugfix(srv) {
   const results = [];
 
-  // exec_safety blocklist: -EncodedCommand bypass
+  // v0.7.1 hotfix probe — execute_command stdout capture (bug #2 since
+  // project start). Pre-v0.7.1 the operational note in CLAUDE.md said
+  // `execute_command` returned empty stdout for external .exe invocations
+  // via `& 'path' args`. This probe pins the actual server-side wire
+  // contract: stdout MUST come back non-empty for a known external exe
+  // (node --version → `v<major>.<minor>.<patch>`). If a future change
+  // breaks the capture pipeline, this probe goes red.
   let r = await call(srv, "execute_command", {
+    command: "node --version",
+    args: [],
+    cwd: WINFS,
+  });
+  let sc = parseSuccessContent(r);
+  results.push(
+    !isError(r) && sc?.exit_code === 0 && /^v\d+\.\d+\.\d+/.test(sc?.stdout ?? "")
+      ? ok("bugfix v0.7.1: execute_command stdout capture for node --version",
+           `stdout=${(sc.stdout ?? "").slice(0, 30).replace(/\n/g, "\\n")}…`)
+      : fail("bugfix v0.7.1: execute_command stdout capture for node --version",
+             "exit_code:0 + stdout matches /^v\\d+\\./",
+             isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // Same probe via direct & 'path' invocation (the form that the historical
+  // CLAUDE.md note specifically called out).
+  r = await call(srv, "execute_command", {
+    command: "& 'C:\\Program Files\\Git\\cmd\\git.exe' --version",
+    args: [],
+    cwd: WINFS,
+  });
+  sc = parseSuccessContent(r);
+  results.push(
+    !isError(r) && sc?.exit_code === 0 && /^git version /.test(sc?.stdout ?? "")
+      ? ok("bugfix v0.7.1: execute_command stdout capture for direct git path",
+           `stdout=${(sc.stdout ?? "").slice(0, 40).replace(/\n/g, "\\n")}…`)
+      : fail("bugfix v0.7.1: execute_command stdout capture for direct git path",
+             "exit_code:0 + stdout matches /^git version /",
+             isError(r) ? parseErrorContent(r) : sc),
+  );
+
+  // exec_safety blocklist: -EncodedCommand bypass
+  r = await call(srv, "execute_command", {
     command: "powershell -EncodedCommand RABhAHQAZQA=",
     args: [],
     cwd: WINFS,
@@ -597,7 +636,7 @@ async function probesBugfix(srv) {
     cwd: WINFS,
     timeout_ms: 1500,
   });
-  let sc = parseSuccessContent(r);
+  sc = parseSuccessContent(r);
   results.push(
     !isError(r) && sc?.timed_out === true
       ? ok("bugfix: execute_command timed_out wire-surface", "timed_out=true")
