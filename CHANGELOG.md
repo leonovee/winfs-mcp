@@ -3,7 +3,42 @@
 All notable changes to mcp-winfs are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased] — v0.7 pre-tag bug-fix wave
+## [Unreleased]
+
+(v0.7.1 patch wave: Windows-flaky process tests, deferred P2 review-wave
+findings. See README §"Known limitations" for the deferred list.)
+
+## [0.7.0] — 2026-05-22 — DC-parity wave
+
+Net surface delta vs v0.6: 30 → 37 tools (+7). Three sub-waves landed
+in sequence — wave 1 (consumer-agent adds), wave 2a (existing-tool
+improvements), wave 2b (process control suite) — followed by a tails
+sweep, a pre-tag external review wave, a pre-tag bug-fix wave, and a
+wire-level smoke harness. The version bumps from 0.6.0 → 0.7.0 with
+no shipped breaking change for callers of the v0.6 surface (the
+internal `SpawnSubprocessResult.aborted` field addition is internal
+to `exec_safety`; the v0.7 wave 2a `replacements_made` and
+`edit_file` EUNIQUE detail renames already shipped in v0.6).
+
+### Smoke + tag-prep changes (this wave)
+
+- **New `scripts/smoke/v0.7-smoke.mjs`** — 55-probe wire-level harness
+  covering wave 1, wave 2a, wave 2b, and pre-tag bug-fix regressions.
+  Strict + unrestricted passes. Non-zero exit on any red. 3 documented
+  skips (ssh_exec happy path needs a real host; concurrency cap
+  pinned by unit test; HTTPS→HTTP downgrade needs a controlled
+  HTTPS server).
+- **Fixed `exec_safety` `-EncodedCommand` over-block** — followup to
+  the v0.7 pre-tag P1.1 fix. The original blocklist pattern matched
+  any `-e|-en|-enc|…` flag regardless of context, which over-blocked
+  legitimate `node -e "..."` / `python -e ...` / `perl -e '...'`
+  invocations. New pattern uses a positive lookahead requiring
+  `powershell` or `pwsh` to appear in the composed string before
+  matching the flag. Surfaced by the smoke harness on first run
+  (start_process probes use `node -e` extensively). +3 over-block
+  regression tests.
+
+## [0.7.0 wave: pre-tag bug-fix] — v0.7 pre-tag bug-fix wave
 
 Bug fixes and defense-in-depth hardening from the v0.7 pre-tag external
 review wave (artifacts at `audit/external_reviews/v0.7-pre-tag/`). 13
@@ -148,7 +183,7 @@ atomicWriteFile signal contract. No new error codes were added —
 EHOSTNOTALLOWED is reused for redirect downgrade with
 `details.reason: "protocol_downgrade"` for caller discrimination.
 
-## [Unreleased] — v0.7 tails (docs + cleanup)
+## [0.7.0 wave: tails] — v0.7 tails (docs + cleanup)
 
 Pre-review-wave sweep. Five small items that accumulated across waves
 1 / 2a / 2b. No new tools, no version bump, no behaviour change for
@@ -205,7 +240,7 @@ existing happy paths.
 
 Net: 371 → 372 passing.
 
-## [Unreleased] — v0.7 wave 2b (process control suite)
+## [0.7.0 wave: 2b] — v0.7 wave 2b (process control suite)
 
 Largest single DC-parity addition. Introduces the first long-lived
 shared mutable state in the server (an in-memory `ProcessRegistry`)
@@ -313,7 +348,7 @@ to a "settled" session, which blocked tempdir cleanup on Windows.
 The fix (`deadlineFired` flag — settle decision is deferred to the
 natural `close` event, which checks the flag) is invariant #38.
 
-## [Unreleased] — v0.7 wave 2a (existing-tool improvements)
+## [0.7.0 wave: 2a] — v0.7 wave 2a (existing-tool improvements)
 
 Compact follow-up to wave 1: four improvements to tools already in the
 surface, plus two documentation hangovers. No new tools. No version
@@ -387,7 +422,7 @@ wave 2b.
 
 Net: 325 → 340 passing (+15 tests, no regressions).
 
-## [Unreleased] — v0.7 wave 1
+## [0.7.0 wave: 1] — v0.7 wave 1
 
 Three additions from the 2026-05-18 ecom-session consumer-agent feedback
 report (full report archived in the appendix of

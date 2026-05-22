@@ -276,6 +276,49 @@ started in one is invisible to the other. This is by design (no
 locking on a shared on-disk store), but worth flagging if you script
 across multiple clients.
 
+### Windows-flaky process tests (v0.7.1 patch scope)
+
+10 tests under `tests/unit/process/*` exhibit intermittent failures on
+Windows due to EBUSY-on-rmdir during `afterEach` cleanup races (the
+test's temp directory is removed before the child process has fully
+released its handles) and timing-sensitive process-state assertions
+(`expected 'running' to be 'timed_out'` — a 1-second
+`Start-Sleep` deadline that V8 sometimes evaluates a few ms early).
+Production code is correct: the v0.7 smoke harness exercises
+`start_process` / `interact` / `list_process` / `kill_process` at the
+wire level and all 9 wave-2b probes pass deterministically. The
+flakiness is a test-side reliability issue scheduled for the v0.7.1
+patch wave (EBUSY retry with backoff on Windows tempdir removal,
+event-driven `waitForStatus` assertions in place of timeout-driven
+ones). **CI workaround:** rerun the affected suite; failures do not
+indicate a regression in production behavior.
+
+### Deferred v0.7 review-wave findings (v0.7.1 patch scope)
+
+The v0.7 pre-tag external review wave produced ~15 P2 findings (full
+consolidation files at `audit/external_reviews/v0.7-pre-tag/`) that
+are deferred to v0.7.1. None are production-blocking; all are
+quality-of-implementation hardening. Highlights:
+
+- `fetch_url` truncated-flag rewire (currently dead code in success path).
+- `fetch_url` gzip silent-corruption when server ignores
+  `Accept-Encoding: identity` — surface an `EENCODING` instead.
+- `fetch_url` `EMAXREDIRECTS` code (currently reuses `EHOSTNOTALLOWED`
+  for redirect-chain overflow — semantically wrong).
+- `fetch_url` 3xx body early-destroy (saves up to 15 MB per chain).
+- `edit_file` UTF-8 boundary in diff truncation (cuts mid-multibyte
+  sequence on non-ASCII content).
+- `edit_file` TOCTOU fd-bound read side (apply audit_tail v0.3.2
+  pattern to the read leg of edit_file).
+- `grep` stream pagination memory (`searchFileFull` accumulates all
+  matches before slicing — moderate refactor).
+- `grep` unified `truncated` semantics across timeout / max_matches /
+  ceiling (design call needed first).
+
+See `audit/external_reviews/v0.7-pre-tag/_findings_*.md` for the
+per-surface consolidation, including which reviewer(s) raised each
+finding and the recommended fix sketch.
+
 ## Hard invariants (always on)
 
 - **UTF-8 native I/O.** BOM stripped on read; never written.
