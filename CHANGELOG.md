@@ -8,6 +8,74 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 (Future patch wave: Windows-flaky process tests, deferred P2 review-wave
 findings. See README §"Known limitations" for the deferred list.)
 
+## [0.7.2] — 2026-05-22 — PowerShell wrapper hardening (H2 from v0.7.1 prompt)
+
+Followup to v0.7.1's bug #2 investigation. v0.7.1 confirmed the
+reported symptoms do not reproduce in winfs source code; this release
+applies the H2 hardening suggestions from the original hotfix prompt
+as defense-in-depth against the suspected environmental causes
+(CLIXML leakage on stdout, stdin-deadlock waiting for input, OEM
+code page corrupting non-ASCII output, `$LASTEXITCODE` hidden behind
+the PowerShell wrapper).
+
+### Changed — execute_command PowerShell wrapper
+
+`src/tools/exec/execute_command.ts` invokes PowerShell with two new
+flags and a wrapped composed command:
+
+  Flags:
+  - `-OutputFormat Text` — pins plain-text stdout; defends against
+    any CLIXML serialization leakage in `-Command` contexts.
+  - `-InputFormat None` — PowerShell does not try to read stdin even
+    if a child requests input. Closes the "pipe-capture hangs
+    PowerShell waiting on stdin" pattern even though stdio[0] is
+    already `"ignore"`.
+
+  Composed command:
+  - Prefix `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; `
+    — forces UTF-8 on stdout. The system OEM code page (1252, 437,
+    850, 1251 on common Windows installs) would otherwise corrupt
+    non-ASCII output and surface as EENCODING in our strict UTF-8
+    decoder.
+  - Suffix `; exit $LASTEXITCODE` — propagates the last external
+    command's exit code through the PowerShell wrapper. Defensive
+    against future composed-command shapes where multiple statements
+    run.
+
+### Added — regression tests (+6)
+
+`tests/unit/exec/powershell_wrapper_hardening.test.ts` pins the new
+wrapper contracts:
+
+- UTF-8 output: `Write-Output 'привет мир ✓'` captured intact
+- `exit 7` still preserves exit code 7 (suffix doesn't run after exit)
+- `node -e "process.exit(42)"` surfaces exit code 42 through the
+  wrapper
+- `Get-Date` (cmdlet) still exits 0 with the suffix
+- Multi-statement `node --version; Get-Date` exits 0 with combined
+  stdout
+- No stdin-deadlock: `& 'node' -e ...` completes in <3s
+
+All 42 pre-existing exec tests pass without modification.
+
+### Tests + smoke
+
+- 402 → 408 passing (+6 hardening regression tests; excluding the 10
+  pre-existing Windows-flaky `tests/unit/process/*` tests still on
+  the future-patch list)
+- Smoke 57/57 green — both v0.7.1 stdout-capture probes still pass
+  through the hardened wrapper (`v24.15.0`, `git version 2.54.0…`)
+
+### Not changed — source-code defect status
+
+The H2 hardening is defensive; bug #2's reported symptoms still do
+not reproduce in winfs source code per the v0.7.1 investigation. If
+chat-Claude's environment still exhibits empty stdout / 4-min hangs /
+CommandNotFoundException after upgrading to v0.7.2, the root cause is
+external to winfs server code (MCP transport, different winfs
+instance, PowerShell version mismatch) and would need traffic-log
+evidence from the failing call to localise further.
+
 ## [0.7.1] — 2026-05-22 — bug #2 investigation + defensive coverage
 
 The v0.7.1 hotfix prompt opened on a P0 report from chat-Claude: that
