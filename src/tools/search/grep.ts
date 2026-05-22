@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import * as path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
@@ -130,6 +131,12 @@ async function searchFile(
   for (let i = 0; i < lines.length; i++) {
     if (signal.aborted) break;
     const line = lines[i]!;
+    // P2.5 (v0.7 pre-tag bug-fix): defensive lastIndex reset. With the
+    // current (no `g`/`y` flags) compile path this is a no-op, but if a
+    // future change adds those flags the same RegExp instance is reused
+    // across all files and lines — accumulating lastIndex would cause
+    // silent false negatives. One-line guarantee against that regression.
+    re.lastIndex = 0;
     if (!re.test(line)) continue;
     const match: Match = { file: filePath, line: i + 1, match: line };
     if (contextLines > 0) {
@@ -173,6 +180,8 @@ async function searchFileFull(
     if (signal.aborted) break;
     if (entries.length >= remainingToCeiling) break;
     const line = lines[i]!;
+    // P2.5 defensive reset — see searchFile for rationale.
+    re.lastIndex = 0;
     if (!re.test(line)) continue;
     const match: Match = { file: filePath, line: i + 1, match: line };
     if (contextLines > 0) {
@@ -199,6 +208,31 @@ export async function grepImpl(
       return buildError("EINVAL", err.message, { details: { path_glob: args.path_glob } });
     }
     throw err;
+  }
+
+  // P2.8 (v0.7 pre-tag bug-fix): defense-in-depth — assert compileGlob
+  // returned a non-empty absolute base before handing it to checkAllowed.
+  // A wildcards-only pattern like `**/*.ts` could (depending on compileGlob
+  // future changes) return base="" or base="." which checkAllowed would
+  // resolve against process.cwd(), silently expanding the search outside
+  // allowedRoots.
+  if (!compiled.base || !path.isAbsolute(compiled.base)) {
+    return buildError("EINVAL", "path_glob must have an absolute literal prefix", {
+      details: { path_glob: args.path_glob, base: compiled.base },
+      hint: "Use an absolute path glob like 'C:\\\\proj\\\\**\\\\*.ts'; wildcards-only patterns are not allowed.",
+    });
+  }
+
+  // P1.3 (v0.7 pre-tag bug-fix): defense-in-depth context_lines guard.
+  // Zod rejects negatives at the registered-tool boundary, but impl
+  // callers (unit tests, future internal tools) may bypass that schema.
+  if (
+    args.context_lines !== undefined &&
+    (args.context_lines < 0 || !Number.isInteger(args.context_lines))
+  ) {
+    return buildError("EINVAL", "context_lines must be a non-negative integer", {
+      details: { context_lines: args.context_lines },
+    });
   }
 
   const baseCheck = await checkAllowed(compiled.base, config, { allowMissing: true });
@@ -345,18 +379,24 @@ Errors: EPERM_ROOT, EINVAL (bad glob or regex).`,
       },
     },
     async (args) => {
-      const innerDeadline = resolveTimeoutMs(
+      // P1.1 (v0.7 pre-tag bug-fix): the prior clamp order made
+      // outer = min(inner + buffer, maxTimeoutMs), so when the caller
+      // requested timeout_ms === maxTimeoutMs both timers fired at the
+      // same instant. V8 timer ordering is non-deterministic at equal
+      // expiry — the outer wrapper could win, returning ETIMEDOUT
+      // instead of grep's partial-result path.
+      //
+      // New order: compute the outer deadline against maxTimeoutMs FIRST,
+      // then derive the inner deadline as `outerDeadline - BUFFER` (≥ 1 ms).
+      // This guarantees the inner deadline always fires ≥ BUFFER_MS before
+      // the outer regardless of caller input.
+      const requested = resolveTimeoutMs(
         (args as Record<string, unknown>).timeout_ms as number | undefined,
         config.defaultTimeoutMs,
         config.maxTimeoutMs,
       );
-      // Outer wrapper deadline = inner + buffer, clamped to maxTimeoutMs. This
-      // guarantees the inner deadline fires first and returns partial results,
-      // rather than the wrapper synthesising an ETIMEDOUT error.
-      const outerDeadline = Math.min(
-        innerDeadline + OUTER_TIMEOUT_BUFFER_MS,
-        config.maxTimeoutMs,
-      );
+      const outerDeadline = requested;
+      const innerDeadline = Math.max(1, outerDeadline - OUTER_TIMEOUT_BUFFER_MS);
       return runTool(
         { tool: "grep", config, timeoutMs: outerDeadline },
         args,
