@@ -4,6 +4,7 @@ import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import { spawnSubprocess } from "../../core/exec_safety.js";
+import { resolvePowershellBin } from "../../core/powershell_resolver.js";
 import { resolveTimeoutMs } from "../../core/timeouts.js";
 import type { ToolContext } from "../../core/tool_context.js";
 
@@ -59,7 +60,7 @@ export async function findCommandImpl(
     `else { Write-Output $c.Name }`;
 
   const lookup = await spawnSubprocess({
-    bin: process.platform === "win32" ? "powershell.exe" : "pwsh",
+    bin: resolvePowershellBin(config),
     args: ["-NoProfile", "-NonInteractive", "-Command", ps],
     cwd: config.resolvedAllowedRoots[0] ?? process.cwd(),
     deadlineMs: deadline,

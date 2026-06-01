@@ -7,6 +7,7 @@ import { buildError, ok, type Result } from "../../core/errors.js";
 import { checkAllowed } from "../../core/allowed_roots.js";
 import { checkExecBlocklist } from "../../core/exec_safety.js";
 import * as execSafety from "../../core/exec_safety.js";
+import { resolvePowershellBin } from "../../core/powershell_resolver.js";
 import { resolveTimeoutMs } from "../../core/timeouts.js";
 import { diagnoseHints } from "../../core/exec_hints.js";
 import { AbsolutePath } from "../../schemas/common.js";
@@ -147,7 +148,7 @@ export async function executeCommandImpl(
   // server source-code layer. The H2 hardening here closes the door on the
   // suspected environmental causes (CLIXML leakage, stdin-deadlock, OEM
   // code page corruption) as defense-in-depth.
-  const bin = process.platform === "win32" ? "powershell.exe" : "pwsh";
+  const bin = resolvePowershellBin(config);
   const wrappedComposed =
     "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " +
     composed +

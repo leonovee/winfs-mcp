@@ -39,6 +39,11 @@ const CONFIG_SCHEMA = z
     // if the path doesn't exist, the tool still registers but every call
     // returns ESSHNOTFOUND.
     sshExePath: z.string().default("C:\\Windows\\System32\\OpenSSH\\ssh.exe"),
+    // v0.9.1 Phase B: explicit PowerShell binary override. If unset,
+    // resolvePowershellBin probes for pwsh.exe (PS 7+) on PATH and
+    // falls back to powershell.exe (PS 5.1). Set this to pin a specific
+    // install (e.g. portable PS 7) or to suppress the auto-probe.
+    powershellExePath: z.string().optional(),
     // v0.7 wave 2b — process control registry tunables. Sessions stay
     // in the in-memory registry for `processSessionTtlMs` after they
     // settle so late `interact` calls can still fetch final output.

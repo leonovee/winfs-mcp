@@ -380,6 +380,30 @@ needed for your machine. `ssh_exec` returns `ESSHNOTFOUND` if the path
 does not exist on disk, so a typo is caught at the first call rather
 than silently falling back.
 
+#### `powershellExePath` override (PowerShell binary selection)
+
+By default `execute_command` and `find_command` resolve the PowerShell
+binary in this order:
+
+1. `config.powershellExePath` if set and the file exists
+2. `pwsh.exe` (PowerShell 7+) auto-detected via `where pwsh` — the
+   Microsoft Store shim (`WindowsApps\pwsh.exe`) is skipped
+3. `powershell.exe` (Windows PowerShell 5.1, always present)
+
+To pin a specific install:
+
+```json
+{
+  "allowedRoots": ["C:\\Users\\me\\src"],
+  "powershellExePath": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+}
+```
+
+All hardening flags (`-NoProfile`, `-NonInteractive`, `-OutputFormat Text`,
+`-InputFormat None`) are honored identically by both binaries, so the
+swap is transparent. If the configured path doesn't exist, a warning is
+written to stderr and auto-detect runs as a fallback.
+
 ## Tests
 
 ```powershell
