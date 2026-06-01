@@ -88,5 +88,47 @@ export async function cleanupTempConfig(root: string): Promise<void> {
   // test leaves writes in flight, they may try to create files inside `root`
   // after rm starts — Windows then returns ENOTEMPTY. Flush before delete.
   await flushAudit();
-  await fs.rm(root, { recursive: true, force: true });
+  await rmdirWithRetry(root);
+}
+
+/**
+ * v0.9.1 Phase A1 — Windows holds directory handles briefly after a
+ * subprocess exits, even when `child.on("close")` has fired and the
+ * session is settled. An immediate `fs.rm({recursive: true})` against
+ * the tempdir that held the subprocess often hits EBUSY / ENOTEMPTY /
+ * EPERM during `afterEach`. The retry loop backs off (50ms, 100ms,
+ * 150ms, …) up to `attempts` tries, surfacing the original error if
+ * still failing after the last attempt. Non-EBUSY errors short-circuit
+ * to fail-fast since they're not the cleanup race.
+ *
+ * Reference: v0.7 pre-tag wave's 10 Windows-flaky failures in
+ * tests/unit/process/* — all EBUSY-on-rmdir during afterEach. This
+ * helper closes the entire class. Spec invariant #41
+ * (settle-by-close-event) addressed the underlying ProcessRegistry
+ * race; this helper closes the OS-handle-release race that's
+ * downstream of it.
+ */
+export async function rmdirWithRetry(
+  p: string,
+  attempts = 5,
+  delayMs = 50,
+): Promise<void> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await fs.rm(p, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (i === attempts - 1) throw err;
+      if (e?.code !== "EBUSY" && e?.code !== "ENOTEMPTY" && e?.code !== "EPERM") {
+        throw err;
+      }
+      // Linear backoff: 50ms, 100ms, 150ms, 200ms. Total ≤ 500ms across
+      // all attempts. Windows handle-release after subprocess exit
+      // typically completes within 100-200ms; 5 attempts × linear
+      // backoff is the empirical sweet spot from similar Node-on-Windows
+      // test-cleanup patterns.
+      await new Promise((res) => setTimeout(res, delayMs * (i + 1)));
+    }
+  }
 }
