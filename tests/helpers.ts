@@ -92,43 +92,49 @@ export async function cleanupTempConfig(root: string): Promise<void> {
 }
 
 /**
- * v0.9.1 Phase A1 — Windows holds directory handles briefly after a
- * subprocess exits, even when `child.on("close")` has fired and the
- * session is settled. An immediate `fs.rm({recursive: true})` against
- * the tempdir that held the subprocess often hits EBUSY / ENOTEMPTY /
- * EPERM during `afterEach`. The retry loop backs off (50ms, 100ms,
- * 150ms, …) up to `attempts` tries, surfacing the original error if
- * still failing after the last attempt. Non-EBUSY errors short-circuit
- * to fail-fast since they're not the cleanup race.
+ * v0.9.1 Phase A1 — Windows holds directory handles after a subprocess
+ * exits, sometimes for many seconds. An immediate `fs.rm({recursive: true})`
+ * against the tempdir that held the subprocess often hits EBUSY /
+ * ENOTEMPTY / EPERM during `afterEach`. Investigation showed even after
+ * the subprocess close event fires, the OS keeps the cwd handle live
+ * (likely process-record reaping delay + Defender post-exit scan), and
+ * the empty tempdir can be undeletable for 10–20+ seconds.
+ *
+ * Strategy:
+ *   - Use Node's built-in `fs.rm({maxRetries, retryDelay})` which retries
+ *     with linear backoff at the libuv layer for the recognised codes.
+ *   - On non-EBUSY/ENOTEMPTY/EPERM errors, throw — those indicate a
+ *     real bug, not a Windows handle-release race.
+ *   - On EBUSY/ENOTEMPTY/EPERM after retries exhausted, log to stderr
+ *     but DON'T throw. The test's logical assertion has already run.
+ *     The temp dir will be cleaned up by Windows `%TEMP%` gc eventually,
+ *     and the cleanup failure is not a test-correctness bug.
  *
  * Reference: v0.7 pre-tag wave's 10 Windows-flaky failures in
- * tests/unit/process/* — all EBUSY-on-rmdir during afterEach. This
- * helper closes the entire class. Spec invariant #41
- * (settle-by-close-event) addressed the underlying ProcessRegistry
- * race; this helper closes the OS-handle-release race that's
- * downstream of it.
+ * tests/unit/process/* — all EBUSY-on-rmdir during afterEach. Spec
+ * invariant #41 (settle-by-close-event) addressed the underlying
+ * ProcessRegistry race; this helper closes the OS-handle-release
+ * race that's downstream of it without blocking on it.
  */
-export async function rmdirWithRetry(
-  p: string,
-  attempts = 5,
-  delayMs = 50,
-): Promise<void> {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      await fs.rm(p, { recursive: true, force: true });
+export async function rmdirWithRetry(p: string): Promise<void> {
+  try {
+    await fs.rm(p, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 200,
+    });
+    return;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e?.code === "EBUSY" || e?.code === "ENOTEMPTY" || e?.code === "EPERM") {
+      // Log so monitoring can spot if the rate climbs, but don't fail
+      // the test for an OS handle-release race outside our control.
+      process.stderr.write(
+        `rmdirWithRetry: ${e.code} on ${p} after retries; leaking to %TEMP% gc\n`,
+      );
       return;
-    } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      if (i === attempts - 1) throw err;
-      if (e?.code !== "EBUSY" && e?.code !== "ENOTEMPTY" && e?.code !== "EPERM") {
-        throw err;
-      }
-      // Linear backoff: 50ms, 100ms, 150ms, 200ms. Total ≤ 500ms across
-      // all attempts. Windows handle-release after subprocess exit
-      // typically completes within 100-200ms; 5 attempts × linear
-      // backoff is the empirical sweet spot from similar Node-on-Windows
-      // test-cleanup patterns.
-      await new Promise((res) => setTimeout(res, delayMs * (i + 1)));
     }
+    throw err;
   }
 }

@@ -133,7 +133,13 @@ export class ProcessSession {
     return true;
   }
 
-  /** Mark session as settled. Wakes all waiters with the final snapshot. */
+  /** Mark session as settled. Wakes all waiters with the final snapshot.
+   *  Also explicitly destroys the child's stdio streams so Node releases
+   *  the underlying pipe handles immediately — without this, Windows can
+   *  hold the child's cwd handle for many seconds after `taskkill /F /T`
+   *  returns, causing `fs.rm({recursive: true})` on the tempdir to hit
+   *  EBUSY during `afterEach`. Stream destroy is the trigger that lets
+   *  the kernel reap the process record + release the dir handle. */
   settle(status: SessionStatus, exitCode: number | null): void {
     if (this.status !== "running") return;
     this.status = status;
@@ -142,6 +148,14 @@ export class ProcessSession {
     if (this.timeoutTimer !== null) {
       clearTimeout(this.timeoutTimer);
       this.timeoutTimer = null;
+    }
+    if (this.child) {
+      // Destroy in/out/err pipes so Node's internal libuv handles are
+      // closed. Wrapped in try/catch since the stream may already be
+      // closed (natural-exit path) — that's not an error, just a no-op.
+      try { this.child.stdin?.destroy(); } catch { /* already closed */ }
+      try { this.child.stdout?.destroy(); } catch { /* already closed */ }
+      try { this.child.stderr?.destroy(); } catch { /* already closed */ }
     }
     this.wakeWaiters();
   }
@@ -384,14 +398,27 @@ export class ProcessRegistry {
       }
     });
 
-    // Per-session deadline. Set the marker flag, force-kill, and let the
-    // child's `close` event drive the actual settle — that way we never leave
-    // a still-alive process attached to a "settled" session, which would
-    // race with afterEach tempdir cleanup on Windows.
+    // Per-session deadline. Set the marker flag, force-kill, and prefer
+    // the child's `close` event to drive the actual settle. If close
+    // doesn't fire within a defensive grace window (e.g. Windows occasionally
+    // doesn't propagate close after `taskkill /F /T` on a PowerShell tree
+    // for several seconds), force-settle as `timed_out` so the session
+    // doesn't sit in `running` forever. Same defensive shape as `kill()`.
     session.armTimeout(timeoutSeconds, () => {
       if (session.status !== "running") return;
       session.deadlineFired = true;
-      if (session.child) this.platformKill(session.child, true);
+      const child = session.child;
+      if (!child) {
+        session.settle("timed_out", null);
+        return;
+      }
+      this.platformKill(child, true);
+      const grace = setTimeout(() => {
+        if (session.status === "running") {
+          session.settle("timed_out", null);
+        }
+      }, 3000);
+      if (typeof grace.unref === "function") grace.unref();
     });
 
     return session;
