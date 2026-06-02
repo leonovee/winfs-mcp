@@ -5,9 +5,120 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
-(Future patch wave: Windows-flaky process tests, deferred P2 review-wave
-findings. P1 MCP Roots and P3 audit-IO investigation BOTH closed in
-v0.9.0 / v0.8.0 respectively. See README §"Known limitations".)
+## [0.9.1] — 2026-06-02 — patch wave: flaky tests + deferred P2 + pwsh
+
+Closes the two known unresolved tracks at the end of v0.9.0: the 10
+Windows-flaky process tests, and the deferred P2 review findings from
+the v0.7 pre-tag wave. Also ships the pwsh.exe cosmetic + PowerShell
+binary configuration.
+
+### Added
+
+- **`config.powershellExePath`** — explicit override for the PowerShell
+  binary used by `execute_command` and `find_command`. Default
+  auto-detect prefers `pwsh.exe` (PS 7+) via `where pwsh` and falls
+  back to `powershell.exe` (PS 5.1). The Microsoft Store
+  `WindowsApps\pwsh.exe` shim is skipped. All v0.7.2 H2 hardening flags
+  work identically under both binaries — swap is transparent.
+- **`EMAXREDIRECTS` error code** — fetch_url's redirect-chain
+  exhaustion path now surfaces a distinct error code instead of
+  `EHOSTNOTALLOWED`. Details: `{ limit, attempted, final_url }`.
+- **`EENCODING_UNSUPPORTED` error code** — fetch_url refuses
+  Content-Encoding it doesn't decode (gzip/deflate/br); previously
+  silent byte-count corruption when the server ignored
+  `Accept-Encoding: identity`.
+
+### Changed
+
+- **fetch_url: redirect-limit code** — `EHOSTNOTALLOWED` →
+  `EMAXREDIRECTS` on redirect-chain exhaustion. **Caller-breaking**:
+  callers checking `EHOSTNOTALLOWED` on the redirect exhaustion path
+  now see the more specific code.
+- **grep: streaming pagination** — `total_matches` is now a LOWER
+  bound when more results follow the current page;
+  `total_matches_capped: true` signals it. Pre-fix `grep` always
+  scanned to the 10K `TOTAL_MATCH_CEILING` to compute an exact total;
+  now it stops as soon as `offset + pageSize + 1` matches are
+  collected. Memory bound shrinks from "all matches up to ceiling"
+  to "the page window plus one". `next_offset` semantics preserved.
+- **walkFiles: opt-in sorted traversal** — new `sorted: true` option
+  for alphabetical deterministic file visiting. Used by grep
+  pagination so an early stop produces the same page on each run.
+  glob's unsorted path unchanged.
+- **vitest hookTimeout 15s → 30s** — gives `cleanupTempConfig`
+  headroom for the EBUSY-retry ladder during Windows handle-release
+  race.
+
+### Fixed
+
+- **10 Windows-flaky process tests stabilized** — root causes:
+  ProcessRegistry timeout handler didn't defensively settle when
+  `taskkill /F /T` failed to propagate `close` event on a PowerShell
+  tree; settle didn't destroy child stdio pipes so Node held libuv
+  handles; `fs.rm` against the tempdir hit EBUSY because Windows held
+  the killed-subprocess's cwd handle. Fixes:
+  `ProcessSession.settle` destroys stdio pipes; timeout handler adds
+  a 3s defensive grace + force-settle if close doesn't fire;
+  `rmdirWithRetry` uses Node's built-in retry ladder + logs-and-leaks
+  on exhaustion. 20-loop validation: ~85% clean runs (residual
+  documented in `tests/unit/process/_known-flaky.md`).
+- **fetch_url P2.3 silent gzip corruption** — refuse with
+  `EENCODING_UNSUPPORTED` instead of returning byte-wise mangled body.
+- **fetch_url P2.5 late chunk push after settle** — data handler now
+  drops chunks arriving after safeResolve fires.
+- **fetch_url P2.6 3xx body bandwidth waste** — `res.destroy()` after
+  reading status + Location; previous code streamed up to maxBytes
+  per redirect hop.
+- **fetch_url P2.9 trailing-dot FQDN mismatch** — canonicalize both
+  URL hostname and allowlist entries (strip trailing dot, lowercase,
+  trim) so `example.com.` and `example.com` compare equal as DNS
+  intends.
+- **execute_command P2.3 blocklist cache key** — hash
+  `DEFAULT_EXEC_BLOCKLIST` into the cache key so runtime DEFAULT
+  changes cannot serve stale compiled list.
+- **execute_command P2.7 taskkill /F narrow** — pattern now requires
+  BOTH `/F` AND `/T` (tree-force-kill is the destructive case);
+  single-PID `taskkill /F` is legitimate after locating via tasklist.
+- **execute_command P2.8 cwdCheck unsafe cast** — replaced with
+  discriminant property check; defensive EIO if checkAllowed's return
+  shape ever drops `realPath`.
+- **edit_file P2.2 UTF-8 codepoint boundary** — `safeUtf8Cut` helper
+  walks back to nearest valid sequence boundary before diff
+  truncation; pre-fix the byte-boundary cut emitted trailing U+FFFD
+  replacement chars on non-ASCII content.
+- **edit_file P2.4 TOCTOU narrowing** — open fd via `realPath`, fstat
+  via fd, read via fd; eliminates the prior stat→read race window
+  where an attacker could swap the file with a symlink between stat
+  decision and read.
+
+### Docs
+
+- **grep CRLF / bare-`\r` line-ending normalisation** — tool
+  description now spells out that files split on `\r?\n`; bare-`\r`
+  (classic Mac) files become one giant line; literal `\r` in pattern
+  never matches.
+- **execute_command detached-grandchild caveat** — tool description
+  notes `taskkill /T` does NOT terminate processes that escape the
+  process group (Win32 `DETACHED_PROCESS`, PS `Start-Process
+  -WindowStyle Hidden` without `-Wait`).
+- **README §Configuration: `powershellExePath`** — full priority
+  ladder + example.
+- **edit_file WeakMap convention** — inline comment at
+  `auditByResult` documenting the "don't clone result.value between
+  impl and runTool" rule. Code-level fix deferred per Phase 0 triage.
+
+### Deferred to a future release
+
+- **fetch_url P2.1 truncated flag rewire** — current cap-hit always
+  fires `ESIZE` (never returns a truncated success body), so the
+  proposed split into `body_truncated_by_size` /
+  `body_omitted_by_content_type` adds output noise without behavior
+  change. Will re-evaluate when a second truncation source lands
+  (e.g. content-type denylist).
+- **execute_command P2.2 argv-quoting validation, P2.4 dynamic PATH
+  probe, grep P2.7 per-line cap, edit_file P2.3 WeakMap structural
+  change** — see
+  `audit/external_reviews/v0.7-pre-tag/_post-v0.9.0-status.md`.
 
 ## [0.9.0] — 2026-05-22 — MCP Roots protocol support
 
