@@ -5,6 +5,54 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-06-02 — security audit wave: npm audit 7 → 0
+
+`npm audit` reported 7 vulnerabilities (1 low, 5 moderate, 1 critical) in
+the dependency tree. The exposure assessment in
+`audit/security/v0.9.2-triage.md` classified them **0 EXPOSED, 2 LOW
+(unreachable code paths), 5 DEV-ONLY** — none reachable by attacker-
+influenced input on a stdio-launched winfs server. All 7 were closed
+anyway, cleanly, bringing the count to **0** without breaking the shipped
+runtime.
+
+### Security
+
+- **vitest 2 → 4** — closes **GHSA-5xrq-8626-4rwp** (critical: Vitest UI
+  server arbitrary file read/exec) plus 4 transitive moderates
+  (`@vitest/mocker`, `vite`, `vite-node`, and `esbuild` dev-server SSRF,
+  **GHSA-67mh-4wv8-2f99**). All are dev-test tooling, not in
+  `package.json#files`, never shipped in `dist/`; the critical's
+  vulnerable path (the Vitest UI server) is never started by `vitest run`.
+  Real runtime exposure NONE; closed because the v4 migration proved clean.
+- **diff 7 → 9** — closes **GHSA-73rr-hh4g-fpgx** (low: jsdiff DoS in
+  `parsePatch`/`applyPatch`). `diff` is a runtime dependency, but winfs
+  calls only `createPatch` (edit_file) and `createTwoFilesPatch`
+  (diff_files) — patch *generation* — and never the vulnerable
+  parse/apply path. API-stable bump; 490 tests green.
+- **qs 6.15.1 → 6.15.2** — closes **GHSA-q8mj-m7cp-5q26** (moderate:
+  remotely triggerable `qs.stringify` DoS). Transitive via
+  `@modelcontextprotocol/sdk → express`; unreachable because winfs runs
+  stdio-only and never instantiates express. Non-breaking patch via
+  `npm audit fix`.
+
+Residual after the wave: **0 vulnerabilities.**
+
+### Changed
+
+- **vitest 4 test migration** (test-only, no shipped-code change) — moved
+  `{ timeout: N }` to the 2nd-argument `describe(name, options, fn)`
+  signature on the 12 affected suites (vitest 4 removed the 3rd-arg
+  `describe(name, fn, options)` form); timeouts preserved verbatim. Dropped
+  the `test.poolOptions` block (removed in vitest 4; it only restated the
+  default `forks.singleFork: false`).
+
+### Tooling
+
+- **smoke harness portability** — `scripts/smoke/v0.7-smoke.mjs` now derives
+  the repo root from its own location (`import.meta.url`) instead of a
+  hardcoded absolute path, so the 72-probe wire-level gate runs on any
+  checkout regardless of machine.
+
 ## [0.9.1] — 2026-06-02 — patch wave: flaky tests + deferred P2 + pwsh
 
 Closes the two known unresolved tracks at the end of v0.9.0: the 10
