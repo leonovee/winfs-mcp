@@ -4,7 +4,7 @@ import { executeCommandImpl } from "../../../src/tools/exec/execute_command.js";
 import { makeTempConfig, cleanupTempConfig } from "../../helpers.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
 
-describe("tools/exec/execute_command", () => {
+describe("tools/exec/execute_command", { timeout: 60_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
 
@@ -86,4 +86,4 @@ describe("tools/exec/execute_command", () => {
     if (!res.ok) throw new Error("expected ok");
     expect(res.value.exit_code).toBe(0);
   });
-}, { timeout: 60_000 });
+});

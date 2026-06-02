@@ -11,7 +11,7 @@ import type { ResolvedConfig } from "../../src/core/config.js";
  * Both layers must independently catch malicious destinations. These tests
  * pin the boundary on each.
  */
-describe("invariant: fetch_url SSRF defenses (spec §2 #10)", () => {
+describe("invariant: fetch_url SSRF defenses (spec §2 #10)", { timeout: 30_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
 
@@ -87,4 +87,4 @@ describe("invariant: fetch_url SSRF defenses (spec §2 #10)", () => {
     if (res.ok) throw new Error("expected error");
     expect(res.error.code).toBe("EINVAL");
   });
-}, { timeout: 30_000 });
+});

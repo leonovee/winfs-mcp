@@ -13,7 +13,7 @@ const sleepArgv = (sec: number): string[] =>
     ? ["powershell.exe", "-NoProfile", "-Command", `Start-Sleep -Seconds ${sec}`]
     : ["sleep", String(sec)];
 
-describe("tools/system/start_process", () => {
+describe("tools/system/start_process", { timeout: 30_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
   let registry: ProcessRegistry;
@@ -127,4 +127,4 @@ describe("tools/system/start_process", () => {
     expect(snap.status).toBe("exited");
     expect(snap.stdout).toMatch(/ok/);
   });
-}, { timeout: 30_000 });
+});

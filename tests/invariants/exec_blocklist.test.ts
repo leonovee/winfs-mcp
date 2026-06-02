@@ -9,7 +9,7 @@ import type { ResolvedConfig } from "../../src/core/config.js";
  * the pre-spawn regex check. Plus: the additive-only `execExtraBlocklist`
  * extends — never replaces — the default list.
  */
-describe("invariant: execute_command blocklist (spec §2 #7)", () => {
+describe("invariant: execute_command blocklist (spec §2 #7)", { timeout: 60_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
 
@@ -69,4 +69,4 @@ describe("invariant: execute_command blocklist (spec §2 #7)", () => {
   it("default blocklist is non-empty (sanity)", () => {
     expect(DEFAULT_EXEC_BLOCKLIST.length).toBeGreaterThan(10);
   });
-}, { timeout: 60_000 });
+});

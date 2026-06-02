@@ -9,7 +9,7 @@ import type { ResolvedConfig } from "../../../src/core/config.js";
  * leakage; `afterEach` calls `shutdown()` to SIGKILL any straggler children
  * and clear the GC interval.
  */
-describe("core/process_registry", () => {
+describe("core/process_registry", { timeout: 30_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
   let registry: ProcessRegistry;
@@ -160,4 +160,4 @@ describe("core/process_registry", () => {
     const snap = await registry.get(session.session_id)!.waitForSettle(5000);
     expect(snap.status).toBe("killed");
   });
-}, { timeout: 30_000 });
+});

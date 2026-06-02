@@ -13,7 +13,7 @@ const sleepArgv = (sec: number): string[] =>
 const echoArgv = (s: string): string[] =>
   isWin ? ["cmd.exe", "/c", `echo ${s}`] : ["sh", "-c", `echo ${s}`];
 
-describe("tools/system/kill_process", () => {
+describe("tools/system/kill_process", { timeout: 60_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
   let registry: ProcessRegistry;
@@ -127,4 +127,4 @@ describe("tools/system/kill_process", () => {
     // either close or the 5+2 s combined grace).
     expect(res.value.status).toBe("killed");
   });
-}, { timeout: 60_000 });
+});

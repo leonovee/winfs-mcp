@@ -4,7 +4,7 @@ import { ProcessRegistry } from "../../../src/core/process_registry.js";
 import { makeTempConfig, cleanupTempConfig } from "../../helpers.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
 
-describe("tools/system/list_process", () => {
+describe("tools/system/list_process", { timeout: 30_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
   let registry: ProcessRegistry;
@@ -64,4 +64,4 @@ describe("tools/system/list_process", () => {
     expect(entry!.settled_at).not.toBeNull();
     expect(entry!.command_prefix).toMatch(/echo hi/);
   });
-}, { timeout: 30_000 });
+});

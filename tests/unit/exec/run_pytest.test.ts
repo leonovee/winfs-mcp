@@ -21,7 +21,7 @@ async function isPytestAvailable(): Promise<boolean> {
   });
 }
 
-describe("tools/exec/run_pytest", () => {
+describe("tools/exec/run_pytest", { timeout: 60_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
 
@@ -81,4 +81,4 @@ describe("tools/exec/run_pytest", () => {
     // Either spawn EPYTHONNOTFOUND or — if python.exe shim resolves — EPARSE.
     expect(["EPYTHONNOTFOUND", "EPARSE", "EIO"]).toContain(res.error.code);
   });
-}, { timeout: 60_000 });
+});

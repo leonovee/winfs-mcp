@@ -3,7 +3,7 @@ import { findCommandImpl } from "../../../src/tools/system/find_command.js";
 import { makeTempConfig, cleanupTempConfig } from "../../helpers.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
 
-describe("tools/system/find_command", () => {
+describe("tools/system/find_command", { timeout: 60_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
 
@@ -42,4 +42,4 @@ describe("tools/system/find_command", () => {
     expect(res.value.found).toBe(true);
     expect(res.value.version).toMatch(/git version/i);
   });
-}, { timeout: 60_000 });
+});

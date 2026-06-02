@@ -13,7 +13,7 @@ const sleepArgv = (sec: number): string[] =>
     ? ["powershell.exe", "-NoProfile", "-Command", `Start-Sleep -Seconds ${sec}`]
     : ["sleep", String(sec)];
 
-describe("tools/system/interact", () => {
+describe("tools/system/interact", { timeout: 30_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
   let registry: ProcessRegistry;
@@ -161,4 +161,4 @@ describe("tools/system/interact", () => {
     expect(r2.value.stdout).toBe("");
     expect(r2.value.stdout_offset).toBe(firstOffset);
   });
-}, { timeout: 30_000 });
+});

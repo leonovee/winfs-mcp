@@ -10,11 +10,9 @@ export default defineConfig({
     // plus the EBUSY catch + stderr-log path in tests/helpers.ts. See
     // rmdirWithRetry doc for the Windows handle-release-race rationale.
     hookTimeout: 30000,
+    // Vitest 4 removed `test.poolOptions`; pool-specific options are now
+    // top-level. We only ever set `forks.singleFork: false`, which is the
+    // default (isolated, multi-fork), so the block is dropped entirely.
     pool: "forks",
-    poolOptions: {
-      forks: {
-        singleFork: false,
-      },
-    },
   },
 });

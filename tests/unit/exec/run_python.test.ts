@@ -5,7 +5,7 @@ import { runPythonImpl } from "../../../src/tools/exec/run_python.js";
 import { makeTempConfig, cleanupTempConfig } from "../../helpers.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
 
-describe("tools/exec/run_python", () => {
+describe("tools/exec/run_python", { timeout: 60_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
 
@@ -77,4 +77,4 @@ describe("tools/exec/run_python", () => {
     if (res.ok) throw new Error("expected error");
     expect(res.error.code).toBe("EPYTHONNOTFOUND");
   });
-}, { timeout: 60_000 });
+});

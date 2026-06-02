@@ -4,7 +4,7 @@ import { makeTempConfig, cleanupTempConfig } from "../../helpers.js";
 import { startTestServer, type MiniServer } from "../../http_helpers.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
 
-describe("tools/network/fetch_url", () => {
+describe("tools/network/fetch_url", { timeout: 30_000 }, () => {
   let config: ResolvedConfig;
   let root: string;
   let server: MiniServer;
@@ -74,4 +74,4 @@ describe("tools/network/fetch_url", () => {
     // SKIPPED for portability: see fetch_url_ssrf invariant for full coverage.
     expect(server.port).toBeGreaterThan(0);
   });
-}, { timeout: 30_000 });
+});
