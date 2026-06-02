@@ -36,10 +36,10 @@ import type { ResolvedConfig } from "./config.js";
  */
 export class RootsResolver {
   private readonly config: ResolvedConfig;
-  /** Immutable snapshot of the config-supplied roots, captured at
-   *  construction. The union starts here and grows when client roots
-   *  arrive; it never shrinks below this set. */
-  private readonly configRoots: readonly string[];
+  /** The config-supplied roots. Snapshotted at construction; replaced only
+   *  via {@link setConfigRoots} on a validated runtime-config hot-reload
+   *  (Phase G). The union starts here and grows when client roots arrive. */
+  private configRoots: readonly string[];
   /** Last validated client-roots array. Replaced atomically per
    *  setClientRoots call; never mutated in place. */
   private currentClientRoots: readonly string[] = [];
@@ -55,6 +55,20 @@ export class RootsResolver {
 
   /** Read-only view of the original config-supplied roots. */
   readonly getConfigRoots = (): readonly string[] => this.configRoots;
+
+  /**
+   * Phase G hot-reload: replace the config-supplied roots after the runtime
+   * config file changed on disk, and recompute the effective union. Client
+   * roots are preserved (the union recomputes from both sets), and the
+   * `config.resolvedAllowedRoots` array identity is stable (recompute mutates
+   * in place). This is the ONLY sanctioned way to update config roots after
+   * construction — invariant #42 keeps RootsResolver the sole owner of writes
+   * to `config.resolvedAllowedRoots`.
+   */
+  readonly setConfigRoots = (newConfigRoots: readonly string[]): void => {
+    this.configRoots = [...newConfigRoots];
+    this.recompute();
+  };
 
   /** Current set of accepted client-supplied roots (after validation). */
   readonly clientRoots = (): readonly string[] => this.currentClientRoots;

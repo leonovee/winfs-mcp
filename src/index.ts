@@ -4,6 +4,7 @@ import { loadConfig } from "./core/config.js";
 import { appendServerStartAudit } from "./core/audit.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createTransportLogger, instrumentTransport } from "./core/transport_log.js";
+import { watchConfigFile, reloadConfigRoots, type ConfigWatchHandle } from "./core/config_watch.js";
 
 function parseArgs(argv: string[]): { configPath: string | undefined } {
   let configPath: string | undefined;
@@ -39,10 +40,12 @@ async function main(): Promise<void> {
   // registry behind ctx so future stateful subsystems plug into the same
   // shutdown hook from `ctx.<subsystem>.shutdown()`.
   let shuttingDown = false;
+  let configWatcher: ConfigWatchHandle | undefined;
   const onShutdown = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     process.stderr.write(`mcp-winfs received ${signal}, shutting down…\n`);
+    configWatcher?.close();
     ctx.registry
       .shutdown()
       .catch(() => {
@@ -73,6 +76,29 @@ async function main(): Promise<void> {
   process.stderr.write(
     `mcp-winfs v${config.version} ready (allowedRoots=${config.allowedRoots.length}, mode=${config.serverMode})\n`,
   );
+
+  // Phase G (child-spawn hardening wave): hot-reload allowedRoots when the
+  // runtime config file changes, without a full restart. Watches the
+  // authoritative path (the --config file, else %LOCALAPPDATA%\mcp-winfs\
+  // config.json). Skipped when running on synthesised defaults (no file on
+  // disk). Validate-before-apply: a malformed edit keeps the previous config
+  // (loadConfig throws → reloadConfigRoots returns {ok:false}); roots update
+  // ONLY through RootsResolver (invariant #42).
+  if (config.configPath !== "<defaults>") {
+    configWatcher = watchConfigFile(config.configPath, () => {
+      void reloadConfigRoots(config.configPath, ctx.rootsResolver).then((r) => {
+        if (r.ok) {
+          process.stderr.write(
+            `mcp-winfs config reloaded: ${r.rootCount} allowedRoots now in effect\n`,
+          );
+        } else {
+          process.stderr.write(
+            `mcp-winfs config reload FAILED, keeping previous config: ${r.error}\n`,
+          );
+        }
+      });
+    });
+  }
 
   // v0.6 §U / invariant #29: record server_mode in the first audit log entry
   // so forensic readers see the mode even if stderr is lost.
