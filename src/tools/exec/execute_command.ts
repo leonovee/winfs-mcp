@@ -119,10 +119,17 @@ export async function executeCommandImpl(
     cwd = config.resolvedAllowedRoots[0]!;
   }
 
+  // Phase B (child-spawn hardening): execute_command is the SHELL one-shot
+  // path, so it uses the dedicated shell timeout pair (default 30s, ceiling
+  // 300s) rather than the general defaultTimeoutMs/maxTimeoutMs (10s/60s) used
+  // by pure-FS tools. A genuinely hung shell child is still bounded and killed
+  // (SIGTERM → taskkill /F /T); the per-call timeout_ms override is honored,
+  // clamped to shellMaxTimeoutMs. Timeout is surfaced as `timed_out: true`
+  // inside the ok() envelope (documented v0.7 contract), never as an error.
   const deadline = resolveTimeoutMs(
     args.timeout_ms,
-    config.defaultTimeoutMs,
-    config.maxTimeoutMs,
+    config.shellTimeoutMs,
+    config.shellMaxTimeoutMs,
   );
 
   // PowerShell as dispatch shell with v0.7.2 H2 hardening:

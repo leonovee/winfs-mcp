@@ -142,6 +142,14 @@ export async function loadConfig(explicitPath?: string): Promise<ResolvedConfig>
     );
   }
 
+  // Phase B: execute_command's one-shot deadline clamps to the shell pair, so
+  // the ceiling must not sit below the default (mirrors the general-pair gate).
+  if (raw.shellMaxTimeoutMs < raw.shellTimeoutMs) {
+    throw new Error(
+      `config.shellMaxTimeoutMs (${raw.shellMaxTimeoutMs}) must be >= shellTimeoutMs (${raw.shellTimeoutMs})`,
+    );
+  }
+
   // v0.6 §U / invariant #28: unrestricted mode requires explicit magic-string
   // confirm. Without it, accidental enable would silently disable allowedRoots —
   // the worst possible failure mode. Reject at startup before any tool can run.
