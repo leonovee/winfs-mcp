@@ -210,6 +210,36 @@ export function buildExecEnv(config: ResolvedConfig): NodeJS.ProcessEnv {
   };
 }
 
+/**
+ * Build the env for a ProcessRegistry SESSION spawn (start_process): the
+ * sanitized base env from {@link buildExecEnv} plus the caller's `extraEnv`,
+ * with the hardening-critical keys RE-PINNED *after* the caller's vars. A
+ * caller may add arbitrary environment variables, but cannot clobber the
+ * sanitized PATH or the standard PATHEXT — otherwise a session spawn could
+ * reinstate the mangled `.CPL` PATHEXT that Phase C exists to fix (the prompt
+ * mandates the hardening on "every spawn — one-shot AND session"). The
+ * one-shot path already had this guarantee because execute_command exposes no
+ * env arg; this gives the session path the same guarantee.
+ *
+ * GIT_TERMINAL_PROMPT defaults to "0" but a caller MAY override it (a session
+ * is interactive by nature; unlike PATH/PATHEXT it is not a determinism or
+ * resolution invariant).
+ */
+export function buildSessionEnv(
+  config: ResolvedConfig,
+  extraEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const sanitizedPathVar = sanitizedPath(config);
+  return {
+    ...buildExecEnv(config),
+    ...extraEnv,
+    PATH: sanitizedPathVar,
+    Path: sanitizedPathVar,
+    PATHEXT: STANDARD_WINDOWS_PATHEXT,
+    GIT_TERMINAL_PROMPT: extraEnv.GIT_TERMINAL_PROMPT ?? "0",
+  };
+}
+
 export interface SpawnSubprocessOptions {
   /** Process binary to spawn (resolved absolute path or name in sanitized PATH). */
   bin: string;

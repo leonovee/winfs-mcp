@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
   buildExecEnv,
+  buildSessionEnv,
   STANDARD_WINDOWS_PATHEXT,
 } from "../../../src/core/exec_safety.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
@@ -40,6 +41,29 @@ describe("core/exec_safety PATHEXT hardening (Phase C)", () => {
   it("sets GIT_TERMINAL_PROMPT=0 in both modes (Phase E — git never hangs on a credential prompt)", () => {
     expect(buildExecEnv(cfg({ execSanitizeEnv: false })).GIT_TERMINAL_PROMPT).toBe("0");
     expect(buildExecEnv(cfg({ execSanitizeEnv: true })).GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  // ── session env: caller extraEnv must not clobber the hardening (review fix) ──
+
+  it("buildSessionEnv re-pins PATH/Path/PATHEXT over a caller's extraEnv", () => {
+    const env = buildSessionEnv(cfg({ execSanitizeEnv: false }), {
+      PATHEXT: ".CPL",
+      PATH: "C:\\evil",
+      Path: "C:\\evil",
+      MY_VAR: "keep-me",
+    });
+    expect(env.PATHEXT).toBe(STANDARD_WINDOWS_PATHEXT); // caller .CPL ignored
+    expect(env.PATH).toContain("System32"); // sanitized, not C:\evil
+    expect(env.PATH).not.toBe("C:\\evil");
+    expect(env.Path).toBe(env.PATH);
+    expect(env.MY_VAR).toBe("keep-me"); // non-protected caller var preserved
+  });
+
+  it("buildSessionEnv defaults GIT_TERMINAL_PROMPT=0 but lets a caller override it", () => {
+    expect(buildSessionEnv(cfg({}), {}).GIT_TERMINAL_PROMPT).toBe("0");
+    expect(
+      buildSessionEnv(cfg({}), { GIT_TERMINAL_PROMPT: "1" }).GIT_TERMINAL_PROMPT,
+    ).toBe("1");
   });
 
   it("still overrides PATH/Path with the sanitized path in both modes (no regression)", () => {

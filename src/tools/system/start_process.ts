@@ -23,7 +23,7 @@ const InputShape = {
   env: z
     .record(z.string(), z.string())
     .optional()
-    .describe("Extra env vars merged on top of the sanitized exec env (PATH override is rejected — use sanitizedPath)."),
+    .describe("Extra env vars merged on top of the sanitized exec env. PATH/Path/PATHEXT are pinned (a PATH/PATHEXT key here is ignored — the sanitized PATH and standard PATHEXT always win); GIT_TERMINAL_PROMPT defaults to '0' but may be overridden."),
   timeout_seconds: z
     .number()
     .int()

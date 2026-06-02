@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { ResolvedConfig } from "./config.js";
-import { buildExecEnv, STANDARD_WINDOWS_PATHEXT } from "./exec_safety.js";
+import { buildSessionEnv, STANDARD_WINDOWS_PATHEXT } from "./exec_safety.js";
 
 /**
  * v0.7 wave 2b: stateful in-memory process registry. First long-lived
@@ -359,7 +359,11 @@ export class ProcessRegistry {
     const session = new ProcessSession(command, this.bufferCap);
     this.sessions.set(session.session_id, session);
 
-    const env = { ...buildExecEnv(this.config), ...extraEnv };
+    // Review fix: buildSessionEnv re-pins PATH/Path/PATHEXT AFTER the caller's
+    // extraEnv so a session spawn cannot clobber the hardening (reinstate the
+    // mangled .CPL PATHEXT / a non-sanitized PATH). Caller may still add other
+    // vars and override GIT_TERMINAL_PROMPT.
+    const env = buildSessionEnv(this.config, extraEnv);
     let child: ChildProcess;
     try {
       child = spawn(command[0]!, command.slice(1), {
