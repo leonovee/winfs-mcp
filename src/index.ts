@@ -3,6 +3,7 @@ import { createServer } from "./server.js";
 import { loadConfig } from "./core/config.js";
 import { appendServerStartAudit } from "./core/audit.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createTransportLogger, instrumentTransport } from "./core/transport_log.js";
 
 function parseArgs(argv: string[]): { configPath: string | undefined } {
   let configPath: string | undefined;
@@ -53,6 +54,20 @@ async function main(): Promise<void> {
   process.on("SIGTERM", onShutdown);
 
   const transport = new StdioServerTransport();
+
+  // #3 transport-hang investigation: opt-in request/response METADATA logging,
+  // gated on WINFS_TRANSPORT_LOG (a file path). Instrument BEFORE connect() so
+  // the inbound `onmessage` trap is in place before the SDK assigns its
+  // handler. Unset → createTransportLogger returns null → transport runs
+  // un-instrumented with zero overhead. Metadata only — never bodies.
+  const transportLogger = createTransportLogger(process.env.WINFS_TRANSPORT_LOG);
+  if (transportLogger) {
+    instrumentTransport(transport, transportLogger);
+    process.stderr.write(
+      `mcp-winfs transport logging ON → ${process.env.WINFS_TRANSPORT_LOG}\n`,
+    );
+  }
+
   await server.connect(transport);
   // stdio MUST NOT log to stdout — use stderr.
   process.stderr.write(

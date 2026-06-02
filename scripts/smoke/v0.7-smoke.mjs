@@ -28,11 +28,15 @@ const SMOKE_TMP = path.join(WINFS, ".v07_smoke_tmp.txt");
 const EXPECTED_TOOL_COUNT = 39; // 30 (v0.6) + 3 (wave 1) + 4 (wave 2b) + 2 (v0.8 P4: directory_tree, read_media_file)
 const EXPECTED_VERSION = "0.9.2";
 
-function spawnServer(configPath) {
+function spawnServer(configPath, extraEnv) {
   const child = spawn(
     process.platform === "win32" ? "node.exe" : "node",
     [path.join(WINFS, "dist", "index.js"), "--config", configPath],
-    { stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
+    {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+    },
   );
   const stderrLines = [];
   let stdoutBuf = "";
@@ -1112,6 +1116,68 @@ async function probesBugfix(srv) {
   return results;
 }
 
+// ────── v0.9 #3: opt-in transport logging (WINFS_TRANSPORT_LOG) ────────────
+
+async function probesTransportLog() {
+  // Self-contained: spawn a server with WINFS_TRANSPORT_LOG pointed at a temp
+  // file, drive a handshake + tools/list + a tools/call carrying a unique
+  // marker argument, then assert the log captured RECV/SEND METADATA with the
+  // documented schema and did NOT capture the request body (the marker).
+  const results = [];
+  const logFile = path.join(os.tmpdir(), `winfs-tlog-smoke-${process.pid}.log`);
+  const BODY_MARKER = "ZZ_SMOKE_BODY_MARKER_QQ";
+  try {
+    await fs.rm(logFile, { force: true });
+  } catch { /* ignore */ }
+
+  const srv = spawnServer(path.join(WINFS, "configs", "local.json"), {
+    WINFS_TRANSPORT_LOG: logFile,
+  });
+  try {
+    await handshake(srv);
+    await srv.send("tools/list", {});
+    // find_command is always registered; the marker rides in the arguments.
+    await call(srv, "find_command", { name: BODY_MARKER, with_version: false });
+    // sync-flush logger — give the kill+last-write a beat, then read.
+  } finally {
+    await srv.stop();
+  }
+
+  let logText = "";
+  try {
+    logText = await fs.readFile(logFile, "utf8");
+  } catch {
+    logText = "";
+  }
+
+  const recvRe = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z RECV \S+ \S+ \d+$/m;
+  const sendRe = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z SEND \S+ \S+ \d+ \S+$/m;
+
+  results.push(
+    logText.length > 0
+      ? ok("v0.9 #3: WINFS_TRANSPORT_LOG file written", `${logText.split("\n").filter(Boolean).length} lines`)
+      : fail("v0.9 #3: WINFS_TRANSPORT_LOG file written", "non-empty log file", "(empty / missing)"),
+  );
+  results.push(
+    recvRe.test(logText)
+      ? ok("v0.9 #3: RECV line matches metadata schema", "match")
+      : fail("v0.9 #3: RECV line matches metadata schema", "timestamp RECV id method bytes", logText.slice(0, 300)),
+  );
+  results.push(
+    sendRe.test(logText)
+      ? ok("v0.9 #3: SEND line matches metadata schema", "match")
+      : fail("v0.9 #3: SEND line matches metadata schema", "timestamp SEND id status bytes duration", logText.slice(0, 300)),
+  );
+  results.push(
+    !logText.includes(BODY_MARKER)
+      ? ok("v0.9 #3: request BODY never logged (metadata-only)", "marker absent")
+      : fail("v0.9 #3: request BODY never logged (metadata-only)", "marker absent from log", "MARKER PRESENT — bodies leaked!"),
+  );
+
+  try { await fs.rm(logFile, { force: true }); } catch { /* ignore */ }
+  return results;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 
 async function runStrictPass() {
@@ -1283,17 +1349,29 @@ async function main() {
     rootsResults = [{ name: "v0.9 §AC: MCP-Roots pass", pass: false, expected: "complete", got: String(e) }];
   }
 
+  // v0.9 #3 transport-log probes — own pass (own server instance with the
+  // WINFS_TRANSPORT_LOG env var set).
+  let tlogResults;
+  console.log("\n========== v0.9 #3 TRANSPORT-LOG PASS ==========");
+  try {
+    tlogResults = await probesTransportLog();
+  } catch (e) {
+    console.error("TRANSPORT-LOG pass crashed:", e);
+    tlogResults = [{ name: "v0.9 #3: transport-log pass", pass: false, expected: "complete", got: String(e) }];
+  }
+
   await cleanupSandbox();
 
   const s = printReport("STRICT mode results", strictResults);
   const u = printReport("UNRESTRICTED mode results", unrestrictedResults);
   const v = printReport("v0.9 MCP-Roots results", rootsResults);
-  const totalPass = s.pass + u.pass + v.pass;
-  const totalFail = s.fails + u.fails + v.fails;
-  const totalSkip = s.skipped + u.skipped + v.skipped;
+  const t = printReport("v0.9 #3 transport-log results", tlogResults);
+  const totalPass = s.pass + u.pass + v.pass + t.pass;
+  const totalFail = s.fails + u.fails + v.fails + t.fails;
+  const totalSkip = s.skipped + u.skipped + v.skipped + t.skipped;
   const totalCount = totalPass + totalFail;
   const dur = Date.now() - t0;
-  console.log(`\n=== OVERALL: ${totalPass}/${totalCount} probes green (strict ${s.pass}/${s.pass + s.fails}, unrestricted ${u.pass}/${u.pass + u.fails}, mcp-roots ${v.pass}/${v.pass + v.fails})`);
+  console.log(`\n=== OVERALL: ${totalPass}/${totalCount} probes green (strict ${s.pass}/${s.pass + s.fails}, unrestricted ${u.pass}/${u.pass + u.fails}, mcp-roots ${v.pass}/${v.pass + v.fails}, transport-log ${t.pass}/${t.pass + t.fails})`);
   console.log(`    skipped: ${totalSkip}`);
   console.log(`    duration: ${dur}ms`);
   if (totalFail > 0) process.exit(1);
