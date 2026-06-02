@@ -63,6 +63,18 @@ in PowerShell adds a BOM and breaks `JSON.parse`. Safe write:
 $json | Out-File -FilePath "$env:LOCALAPPDATA\mcp-winfs\config.json" -Encoding utf8NoBOM
 ```
 
+**Hot-reload of `allowedRoots` (v0.10).** The runtime config file (the
+`--config` path when given, otherwise `%LOCALAPPDATA%\mcp-winfs\config.json`)
+is watched live: edit `allowedRoots` and the new roots take effect **without
+restarting** the server. The edit is **validated before being applied** — a
+malformed change (bad JSON, unknown key, failed validation such as
+`shellMaxTimeoutMs < shellTimeoutMs`) is logged to stderr and the previous
+config stays in force, so a bad edit never bricks the running server. The
+reload preserves any MCP-Roots client roots (union semantics). **Only
+`allowedRoots` hot-reloads**; all other fields (timeouts, byte caps,
+blocklist, mode) still require a restart. When the server is running on
+synthesised defaults (no config file on disk), nothing is watched.
+
 ### ⚠️ Unrestricted filesystem mode (v0.6, opt-in)
 
 For development sandboxes and automated agent VMs where filesystem-wide

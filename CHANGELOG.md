@@ -5,19 +5,66 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-02 — child-spawn hardening + transport logging
+
+Hardens the child-process spawn layer against the real Claude-Desktop-on-Windows
+failure modes observed over a full day of use (the filesystem/cmdlet path was
+already solid; spawned children returned empty or hung). The Phase A map found
+that several defenses already existed on this server — direct stdio capture, a
+hard timeout + tree-kill, closed stdin, and pwsh routing — so the new work
+concentrates on PATHEXT, the git terminal prompt, the shell timeout pair, and a
+runtime config hot-reload. Also ships the opt-in transport metadata logger
+deferred from the #3 investigation.
+
+This wave does **not** address the separate Claude-Desktop ↔ winfs MCP-transport
+large-payload hangs — that's the upstream transport layer (#3 investigation).
+
 ### Added
 
+- **Explicit PATHEXT on every spawn** (Phase C) — winfs no longer forwards the
+  inherited PATHEXT (observed mangled to `.CPL` under Claude Desktop, which
+  broke bare-name resolution of `git`/`node`/`where`/`taskkill`). A single
+  `STANDARD_WINDOWS_PATHEXT` const is pinned on every spawn env: `buildExecEnv`
+  (both branches → `execute_command`/`run_python`/`run_pytest`/`find_command`/
+  `ssh_exec` + the registry sessions), `spawnGit`, the two internal `taskkill`
+  spawns, and the `where pwsh` probe.
+- **`GIT_TERMINAL_PROMPT=0`** (Phase E) on git spawns and in `buildExecEnv`, so
+  an authenticated git op can't hang waiting on a credential prompt.
+- **Runtime config hot-reload of `allowedRoots`** (Phase G) — edit the config
+  file and the new roots take effect without a restart. Watches the
+  authoritative path (the `--config` file, else
+  `%LOCALAPPDATA%\mcp-winfs\config.json`) via a debounced directory watch that
+  survives atomic-replace writes. **Validate-before-apply**: a malformed edit
+  keeps the previous config (the server never bricks). Roots update only through
+  `RootsResolver` (invariant #42), preserving the MCP-Roots client union. Only
+  `allowedRoots` hot-reloads; all other fields remain restart-required.
 - **`WINFS_TRANSPORT_LOG` — opt-in transport metadata logging** (#3
   transport-hang investigation). Set the env var to a file path to append one
   metadata line per inbound request / outbound response
   (`<ts> RECV <id> <method> <bytes>` / `<ts> SEND <id> <status> <bytes>
-  <duration-ms>`). **Off by default** (unset → zero overhead, no behavior
-  change). **Metadata only — never request/response bodies** (no file
-  contents, command output, or secrets); `JSON.stringify` is used solely to
-  measure byte length. Synchronous per-line flush so the log survives a hang.
-  Correlate with Claude Desktop's own `mcp-server-winfs.log` via
-  `scripts/analyze-transport-hang.mjs` to localize which transport leg stalls.
-  See `audit/investigations/v0.9-transport-hang.md`.
+  <duration-ms>`). **Off by default** (unset → zero overhead). **Metadata only —
+  never request/response bodies** (no file contents, command output, or
+  secrets). Synchronous per-line flush so the log survives a hang. Correlate
+  with Claude Desktop's own `mcp-server-winfs.log` via
+  `scripts/analyze-transport-hang.mjs`. See
+  `audit/investigations/v0.9-transport-hang.md`.
+
+### Changed
+
+- **`execute_command` timeout now uses the shell pair** (Phase B) —
+  `shellTimeoutMs` (default 30 s) / `shellMaxTimeoutMs` (default 300 s) instead
+  of the general `defaultTimeoutMs`/`maxTimeoutMs` (10 s/60 s). The per-call
+  `timeout_ms` override is kept, clamped to `shellMaxTimeoutMs`. Other tools
+  keep the general pair. A genuinely hung child is still bounded and killed
+  (SIGTERM → `taskkill /F /T`); timeout is still surfaced as `timed_out: true`
+  inside the success envelope (unchanged contract), never as an error.
+- **Config validation**: `shellMaxTimeoutMs` must be `>= shellTimeoutMs`
+  (mirrors the existing `maxTimeoutMs >= defaultTimeoutMs` gate).
+
+### Notes
+
+- Phase D (direct stdio capture) and Phase F (pwsh routing) were already
+  satisfied on this server — verified, no code change.
 
 ## [0.9.2] — 2026-06-02 — security audit wave: npm audit 7 → 0
 
