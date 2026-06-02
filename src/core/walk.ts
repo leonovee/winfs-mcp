@@ -17,13 +17,24 @@ import type { ResolvedConfig } from "./config.js";
  * the count separately if it wants to report skips (none of the v0.3 tools
  * do; `copy` does and is unaffected).
  */
+export interface WalkOptions {
+  /** v0.9.1 — when true, sort dirents alphabetically before visiting so the
+   *  walk produces a deterministic ordering across runs. Required by callers
+   *  doing offset/limit pagination over the visit stream — without sorted
+   *  traversal, an early stop produces a different page on each run.
+   *  Default false (preserves the prior unsorted readdir-order contract). */
+  sorted?: boolean;
+}
+
 export async function walkFiles(
   start: string,
   config: ResolvedConfig,
   visit: (absPath: string) => boolean | Promise<boolean>,
   signal?: AbortSignal,
+  options?: WalkOptions,
 ): Promise<void> {
   const stack: string[] = [start];
+  const sortedTraversal = options?.sorted === true;
 
   while (stack.length > 0) {
     if (signal?.aborted) return;
@@ -34,6 +45,13 @@ export async function walkFiles(
     } catch {
       continue;
     }
+    if (sortedTraversal) {
+      // Alphabetical by name. Push subdirs in reverse so stack-pop visits them
+      // in ascending order — preserves DFS while giving us a stable global
+      // traversal sequence.
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const childDirs: string[] = [];
     for (const ent of entries) {
       if (signal?.aborted) return;
       const full = path.join(dir, ent.name);
@@ -56,13 +74,21 @@ export async function walkFiles(
       }
 
       if (stat.isDirectory()) {
-        stack.push(real);
+        if (sortedTraversal) {
+          childDirs.push(real);
+        } else {
+          stack.push(real);
+        }
         continue;
       }
       if (stat.isFile()) {
         const keepGoing = await visit(real);
         if (keepGoing === false) return;
       }
+    }
+    if (sortedTraversal && childDirs.length > 0) {
+      // Push in reverse so the alphabetically-first child pops next.
+      for (let i = childDirs.length - 1; i >= 0; i--) stack.push(childDirs[i]!);
     }
   }
 }

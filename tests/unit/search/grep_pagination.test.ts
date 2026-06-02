@@ -10,10 +10,17 @@ import type { ResolvedConfig } from "../../../src/core/config.js";
  *
  *   - `offset` (default 0) / `limit` (default = MAX_MATCHES_DEFAULT) carve a
  *     half-open window [offset, offset+limit) over the match sequence.
- *   - `total_matches` reports the count across the entire search (capped at
- *     a hard ceiling — `total_matches_capped: true` when hit).
+ *   - `total_matches` reports the count of matches examined (may be a LOWER
+ *     bound when the scan stopped early; `total_matches_capped: true`
+ *     signals that — either streaming pagination or the hard ceiling).
  *   - `next_offset` is present iff more results follow the current page.
  *   - Default call (no offset/limit) preserves first-page semantics.
+ *
+ * v0.9.1 P2.1: streaming pagination — the scan now stops as soon as it
+ * has `offset + pageSize + 1` matches in the buffer rather than scanning
+ * the full corpus to compute an exact total. Memory is now bounded by
+ * the page window, not by the corpus size. `total_matches` is now a
+ * lower bound under streaming, surfaced via `total_matches_capped: true`.
  */
 describe("tools/search/grep — pagination (v0.7 wave 2a)", () => {
   let config: ResolvedConfig;
@@ -72,7 +79,9 @@ describe("tools/search/grep — pagination (v0.7 wave 2a)", () => {
     expect(page1.ok).toBe(true);
     if (!page1.ok) throw new Error("expected ok");
     expect(page1.value.matches.length).toBe(10);
-    expect(page1.value.total_matches).toBe(25);
+    // Streaming: total_matches is a lower bound when more results follow.
+    expect(page1.value.total_matches).toBeGreaterThanOrEqual(11);
+    expect(page1.value.total_matches_capped).toBe(true);
     expect(page1.value.next_offset).toBe(10);
     expect(page1.value.matches[0]!.line).toBe(1);
 
@@ -91,7 +100,8 @@ describe("tools/search/grep — pagination (v0.7 wave 2a)", () => {
     expect(page2.ok).toBe(true);
     if (!page2.ok) throw new Error("expected ok");
     expect(page2.value.matches.length).toBe(10);
-    expect(page2.value.total_matches).toBe(25);
+    expect(page2.value.total_matches).toBeGreaterThanOrEqual(21);
+    expect(page2.value.total_matches_capped).toBe(true);
     expect(page2.value.next_offset).toBe(20);
     expect(page2.value.matches[0]!.line).toBe(11);
 
@@ -110,6 +120,7 @@ describe("tools/search/grep — pagination (v0.7 wave 2a)", () => {
     expect(page3.ok).toBe(true);
     if (!page3.ok) throw new Error("expected ok");
     expect(page3.value.matches.length).toBe(5);
+    // Last page: scan finished naturally (no more files), total_matches is exact.
     expect(page3.value.total_matches).toBe(25);
     expect(page3.value.next_offset).toBeUndefined();
   });
@@ -170,8 +181,10 @@ describe("tools/search/grep — pagination (v0.7 wave 2a)", () => {
     expect(res.ok).toBe(true);
     if (!res.ok) throw new Error("expected ok");
     expect(res.value.matches.length).toBe(2);
-    // total_matches reflects the full set, not the page.
-    expect(res.value.total_matches).toBe(5);
+    // Streaming: when there are more results past the page, total_matches
+    // is a lower bound + total_matches_capped: true.
+    expect(res.value.total_matches).toBeGreaterThanOrEqual(3);
+    expect(res.value.total_matches_capped).toBe(true);
     expect(res.value.next_offset).toBe(2);
   });
 });

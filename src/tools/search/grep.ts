@@ -262,11 +262,20 @@ export async function grepImpl(
       details: { offset },
     });
   }
+  // v0.9.1 P2.1: streaming pagination. Sorted-traversal walk lets us stop
+  // as soon as we have `offset + pageSize + 1` matches in the buffer — the
+  // +1 lets us emit `next_offset` truthy. We DON'T need to count every
+  // match in the corpus to paginate correctly when traversal order matches
+  // the final sort key (file path, then line). Bounded memory: at most
+  // `offset + pageSize + 1` matches held simultaneously regardless of
+  // corpus size, instead of the previous TOTAL_MATCH_CEILING (10K).
+  const streamingTarget = offset + pageSize + 1;
   const allMatches: Match[] = [];
   let totalMatches = 0;
   let totalMatchesCapped = false;
   let truncated = false;
   let reason: "timeout" | "max_matches" | undefined;
+  let stoppedEarly = false;
 
   // grep owns its deadline so it can return partial results on expiry instead
   // of the wrapper short-circuiting to ETIMEDOUT. The outer wrapper timeout is
@@ -286,16 +295,27 @@ export async function grepImpl(
       async (absPath) => {
         if (controller.signal.aborted) return false;
         if (!matchGlob(compiled, absPath)) return true;
+        // Per-file budget: only need enough matches to reach
+        // streamingTarget across the cumulative scan.
+        const remainingForPage = Math.max(0, streamingTarget - totalMatches);
+        if (remainingForPage <= 0) {
+          // We already have enough; further files can't change the page.
+          // (Walk is sorted; current file's path sorts AFTER the last file
+          // we processed, and matches sort by file first.)
+          stoppedEarly = true;
+          return false;
+        }
         const remainingToCeiling = TOTAL_MATCH_CEILING - totalMatches;
         if (remainingToCeiling <= 0) {
           totalMatchesCapped = true;
           return false;
         }
+        const perFileBudget = Math.min(remainingForPage, remainingToCeiling);
         const entries = await searchFileFull(
           absPath,
           re,
           args.context_lines,
-          remainingToCeiling,
+          perFileBudget,
           controller.signal,
         );
         for (const m of entries) {
@@ -306,23 +326,47 @@ export async function grepImpl(
           totalMatchesCapped = true;
           return false;
         }
+        // Post-process: if this file filled the per-file budget exactly,
+        // we cannot know whether more matches exist in subsequent files OR
+        // in this file beyond the budget — either way, stop the walk and
+        // signal lower-bound semantics. Without this check, a single-file
+        // test (no second file to trigger the start-of-visit check above)
+        // would scan the whole corpus but stoppedEarly stays false.
+        if (entries.length === perFileBudget && totalMatches >= streamingTarget) {
+          stoppedEarly = true;
+          return false;
+        }
         return true;
       },
       controller.signal,
+      { sorted: true },
     );
   } finally {
     clearTimeout(timer);
   }
 
+  // Sorted traversal + in-file line order means allMatches is ALREADY in
+  // the final sort order; the explicit sort below is defense-in-depth
+  // (cheap when already sorted) and a safety net if a future walk-order
+  // change drifts from the documented sorted contract.
   allMatches.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
 
   // Page-slice over the sorted match sequence.
   const page = allMatches.slice(offset, offset + pageSize);
-  const nextOffset = offset + page.length < totalMatches ? offset + page.length : undefined;
+  // P2.4/P2.9 unified semantics: next_offset truthy iff more results
+  // exist past the current page. With streaming, we know "more" when we
+  // either stopped early (more available; truncated_by_max_matches) or
+  // when totalMatches > offset + pageSize.
+  const more = stoppedEarly || allMatches.length > offset + page.length;
+  const nextOffset = more ? offset + page.length : undefined;
   if (nextOffset !== undefined) {
     truncated = true;
     if (reason === undefined) reason = "max_matches";
   }
+  // total_matches semantic when stoppedEarly: it's a LOWER bound (we
+  // didn't scan the whole corpus). Surface via total_matches_capped so
+  // callers know to keep paginating until next_offset is absent.
+  if (stoppedEarly) totalMatchesCapped = true;
 
   return ok({
     matches: page,
@@ -353,6 +397,14 @@ to false (adds the \`i\` flag). For multiline / dotall semantics use embedded \`
 Execution is bounded by \`timeout_ms\` (default config.defaultTimeoutMs, max config.maxTimeoutMs).
 On deadline the partial result set is returned with \`{truncated: true, reason: "timeout"}\` —
 this is the normal path, not an error.
+
+Line-ending normalisation (P2.3, P2.6): files are split on \`\\r?\\n\` before
+matching. CRLF and LF files behave identically. A pattern containing
+literal \`\\r\` will never match because the carriage return is stripped
+before the regex sees the line. Bare-\`\\r\` (classic Mac) line endings
+are NOT split — such a file is treated as a single very long line; a
+pattern that would have matched a "line" in such a file matches the
+giant single line instead.
 
 Args:
   - path_glob (string): absolute glob (\`*\`, \`?\`, \`**\`, \`[...]\` supported)
