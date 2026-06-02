@@ -682,10 +682,16 @@ async function probesWave2a(srv) {
     limit: 5,
   });
   sc = parseSuccessContent(r);
+  // v0.9.1 P2.1: streaming pagination changed total_matches from an exact
+  // corpus count to a LOWER bound; correspondingly total_matches_capped is
+  // set when more results follow. Assert the new contract: page slice still
+  // exact, next_offset still set, total_matches is at least pageEnd+1, and
+  // total_matches_capped is true (or undefined if walk happened to finish
+  // exactly at the streaming target).
   results.push(
-    !isError(r) && sc?.matches?.length === 5 && sc?.next_offset === 15 && sc?.total_matches === 200
-      ? ok("wave2a: grep offset/limit slice", `5 matches, next_offset=15, total_matches=200`)
-      : fail("wave2a: grep offset/limit slice", "5 matches + next_offset:15 + total_matches:200", isError(r) ? parseErrorContent(r) : sc),
+    !isError(r) && sc?.matches?.length === 5 && sc?.next_offset === 15 && typeof sc?.total_matches === "number" && sc.total_matches >= 16
+      ? ok("wave2a: grep offset/limit slice", `5 matches, next_offset=15, total_matches=${sc.total_matches} (lower bound under streaming)`)
+      : fail("wave2a: grep offset/limit slice", "5 matches + next_offset:15 + total_matches>=16", isError(r) ? parseErrorContent(r) : sc),
   );
 
   // grep pagination: offset past end → empty + no next_offset

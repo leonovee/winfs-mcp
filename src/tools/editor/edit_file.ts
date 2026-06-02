@@ -143,31 +143,41 @@ export async function editFileImpl(
   if ("ok" in check && check.ok === false) return check;
   const realPath = (check as { realPath: string }).realPath;
 
-  let stat: import("node:fs").Stats;
+  // P2.4: TOCTOU narrowing. The original code did `fs.stat(realPath)`
+  // followed by `fs.readFile(realPath)`. Between the stat (which we trust
+  // to say "regular file inside allowedRoots") and the readFile (which
+  // dereferences the path again), an attacker with write access to the
+  // dir could swap the file with a symlink pointing elsewhere. The new
+  // shape opens an fd ONCE right after the realpath check, fstats via the
+  // fd to verify type/size, then reads via the same fd — guaranteeing
+  // the stat decisions and the bytes we read come from the same inode.
+  // The remaining race window is realpath→open which is microseconds.
+  let fh: import("node:fs/promises").FileHandle;
   try {
-    // P1.1: thread signal through fs.stat / fs.readFile / atomicWriteFile so
-    // the wall-clock deadline from withTimeout actually aborts in-flight I/O
-    // instead of leaving an orphan running past ETIMEDOUT.
-    stat = await fs.stat(realPath);
+    fh = await fs.open(realPath, "r");
   } catch (err) {
-    return fromNodeError(err, "stat failed");
+    return fromNodeError(err, "open failed");
   }
-  if (stat.isDirectory()) {
-    return buildError("EISDIR", "Expected a file, got a directory", {
-      details: { path: realPath },
-    });
-  }
-  if (stat.size > config.readMaxBytes) {
-    return buildError("ETOOLARGE", "file exceeds readMaxBytes", {
-      details: { path: realPath, size: stat.size, max_bytes: config.readMaxBytes },
-    });
-  }
-
   let buf: Buffer;
+  let bytesBefore: number;
   try {
-    buf = await fs.readFile(realPath, { signal });
+    const fdStat = await fh.stat();
+    if (fdStat.isDirectory()) {
+      return buildError("EISDIR", "Expected a file, got a directory", {
+        details: { path: realPath },
+      });
+    }
+    if (fdStat.size > config.readMaxBytes) {
+      return buildError("ETOOLARGE", "file exceeds readMaxBytes", {
+        details: { path: realPath, size: fdStat.size, max_bytes: config.readMaxBytes },
+      });
+    }
+    bytesBefore = fdStat.size;
+    buf = await fh.readFile({ signal });
   } catch (err) {
     return fromNodeError(err, "read failed");
+  } finally {
+    try { await fh.close(); } catch { /* already closed / OS releases */ }
   }
   if (looksBinary(buf)) {
     return buildError("EENCODING", "file appears to be binary", {
@@ -299,7 +309,7 @@ export async function editFileImpl(
     ...(truncatedDiff ? { truncated_diff: true } : {}),
   };
   auditByResult.set(value, {
-    bytes_before: stat.size,
+    bytes_before: bytesBefore,
     bytes_after: afterBytes,
   });
   return ok(value);
