@@ -17,8 +17,12 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 
-const WINFS = "C:\\Users\\User\\Desktop\\ai\\tools\\winfs";
+// Derive the repo root from this script's own location
+// (<WINFS>/scripts/smoke/v0.7-smoke.mjs → up two levels) so the harness runs
+// on any checkout regardless of machine, instead of a hardcoded user path.
+const WINFS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SMOKE_DIR = path.join(WINFS, ".v07_smoke_dir");
 const SMOKE_TMP = path.join(WINFS, ".v07_smoke_tmp.txt");
 const EXPECTED_TOOL_COUNT = 39; // 30 (v0.6) + 3 (wave 1) + 4 (wave 2b) + 2 (v0.8 P4: directory_tree, read_media_file)
