@@ -49,6 +49,37 @@ export async function reloadConfigRoots(
   }
 }
 
+/**
+ * Wrap an async task so at most ONE invocation runs at a time, with a
+ * trailing-edge re-run: calls that arrive while a run is in flight are
+ * coalesced into a single run that fires after the current one settles.
+ *
+ * Used to serialize config hot-reloads (review fix): without this, two edits
+ * close together spawn two concurrent `reloadConfigRoots` calls whose
+ * `loadConfig` (which awaits `fs.realpath` per root) can resolve out of
+ * chronological order, leaving a STALE allowedRoots set in effect. Serializing
+ * guarantees the last reload reads the freshest file and wins.
+ */
+export function createSerializedRunner(task: () => Promise<void>): () => void {
+  let running = false;
+  let pending = false;
+  const run = (): void => {
+    if (running) {
+      pending = true;
+      return;
+    }
+    running = true;
+    void task().finally(() => {
+      running = false;
+      if (pending) {
+        pending = false;
+        run();
+      }
+    });
+  };
+  return run;
+}
+
 export interface ConfigWatchHandle {
   close(): void;
 }

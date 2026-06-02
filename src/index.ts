@@ -4,7 +4,12 @@ import { loadConfig } from "./core/config.js";
 import { appendServerStartAudit } from "./core/audit.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createTransportLogger, instrumentTransport } from "./core/transport_log.js";
-import { watchConfigFile, reloadConfigRoots, type ConfigWatchHandle } from "./core/config_watch.js";
+import {
+  watchConfigFile,
+  reloadConfigRoots,
+  createSerializedRunner,
+  type ConfigWatchHandle,
+} from "./core/config_watch.js";
 
 function parseArgs(argv: string[]): { configPath: string | undefined } {
   let configPath: string | undefined;
@@ -85,19 +90,22 @@ async function main(): Promise<void> {
   // (loadConfig throws → reloadConfigRoots returns {ok:false}); roots update
   // ONLY through RootsResolver (invariant #42).
   if (config.configPath !== "<defaults>") {
-    configWatcher = watchConfigFile(config.configPath, () => {
-      void reloadConfigRoots(config.configPath, ctx.rootsResolver).then((r) => {
-        if (r.ok) {
-          process.stderr.write(
-            `mcp-winfs config reloaded: ${r.rootCount} allowedRoots now in effect\n`,
-          );
-        } else {
-          process.stderr.write(
-            `mcp-winfs config reload FAILED, keeping previous config: ${r.error}\n`,
-          );
-        }
-      });
+    // Serialize reloads so overlapping edits never run loadConfig concurrently
+    // (which could otherwise resolve out of order and leave a stale root set);
+    // the trailing re-run guarantees the latest edit wins.
+    const runReload = createSerializedRunner(async () => {
+      const r = await reloadConfigRoots(config.configPath, ctx.rootsResolver);
+      if (r.ok) {
+        process.stderr.write(
+          `mcp-winfs config reloaded: ${r.rootCount} allowedRoots now in effect\n`,
+        );
+      } else {
+        process.stderr.write(
+          `mcp-winfs config reload FAILED, keeping previous config: ${r.error}\n`,
+        );
+      }
     });
+    configWatcher = watchConfigFile(config.configPath, runReload);
   }
 
   // v0.6 §U / invariant #29: record server_mode in the first audit log entry

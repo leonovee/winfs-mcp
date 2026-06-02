@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { RootsResolver } from "../../../src/core/roots_resolver.js";
 import { loadConfig } from "../../../src/core/config.js";
-import { reloadConfigRoots, watchConfigFile } from "../../../src/core/config_watch.js";
+import { reloadConfigRoots, watchConfigFile, createSerializedRunner } from "../../../src/core/config_watch.js";
 import { makeTempConfig, cleanupTempConfig } from "../../helpers.js";
 import { flushAudit } from "../../../src/core/audit.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
@@ -95,6 +95,54 @@ describe("core hot-reload (Phase G)", () => {
     const res = await reloadConfigRoots(p, r);
     expect(res.ok).toBe(false);
     expect(r.effective()).toEqual(before);
+  });
+
+  // ── createSerializedRunner (no concurrent reloads; latest edit wins) ──────
+
+  it("createSerializedRunner never runs concurrently and coalesces a burst into one trailing run", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let runs = 0;
+    const releasers: Array<() => void> = [];
+    const run = createSerializedRunner(
+      () =>
+        new Promise<void>((res) => {
+          runs++;
+          active++;
+          maxActive = Math.max(maxActive, active);
+          releasers.push(() => {
+            active--;
+            res();
+          });
+        }),
+    );
+
+    run(); // starts task 1
+    run(); // in-flight → pending
+    run(); // still pending (coalesced into the single trailing run)
+    expect(runs).toBe(1);
+
+    releasers.shift()!(); // finish task 1 → trailing run fires task 2
+    await new Promise((r) => setTimeout(r, 20));
+    expect(runs).toBe(2);
+    expect(maxActive).toBe(1); // never concurrent
+
+    releasers.shift()!(); // finish task 2 → no pending → stops
+    await new Promise((r) => setTimeout(r, 20));
+    expect(runs).toBe(2);
+  });
+
+  it("createSerializedRunner runs immediately when idle", async () => {
+    let runs = 0;
+    const run = createSerializedRunner(async () => {
+      runs++;
+    });
+    run();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(runs).toBe(1);
+    run();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(runs).toBe(2);
   });
 
   // ── watchConfigFile (debounced) ───────────────────────────────────────────
