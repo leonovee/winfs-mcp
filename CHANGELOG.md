@@ -5,6 +5,20 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **`WINFS_TRANSPORT_LOG` — opt-in transport metadata logging** (#3
+  transport-hang investigation). Set the env var to a file path to append one
+  metadata line per inbound request / outbound response
+  (`<ts> RECV <id> <method> <bytes>` / `<ts> SEND <id> <status> <bytes>
+  <duration-ms>`). **Off by default** (unset → zero overhead, no behavior
+  change). **Metadata only — never request/response bodies** (no file
+  contents, command output, or secrets); `JSON.stringify` is used solely to
+  measure byte length. Synchronous per-line flush so the log survives a hang.
+  Correlate with Claude Desktop's own `mcp-server-winfs.log` via
+  `scripts/analyze-transport-hang.mjs` to localize which transport leg stalls.
+  See `audit/investigations/v0.9-transport-hang.md`.
+
 ## [0.9.2] — 2026-06-02 — security audit wave: npm audit 7 → 0
 
 `npm audit` reported 7 vulnerabilities (1 low, 5 moderate, 1 critical) in

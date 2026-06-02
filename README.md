@@ -347,6 +347,33 @@ finding and the recommended fix sketch.
 | Audit log isn't appearing | `%LOCALAPPDATA%` not set (unusual) or path contains literal `%LOCALAPPDATA%`. | Set the env var or use an absolute `auditLogPath` in the config. |
 | Inspector says "No servers found" when launched with `--config configs/local.json` | Inspector consumes `--config` as its own flag and expects a list-of-servers JSON. | Add the `--` separator so the flag reaches mcp-winfs: `npx @modelcontextprotocol/inspector node dist/index.js -- --config configs/local.json`. |
 | Strict config schema rejects `_comment` keys | The Zod schema is `.strict()` — no JSON-native commentary. | Move documentation to `configs/README.md` or to neighbouring `.md` notes. |
+| `No result received … after waiting 4 minutes` on a tool call | Intermittent stall in the Claude Desktop ↔ winfs stdio transport (not winfs processing — ruled out 3×). Recovery pattern: 2–3 timeouts then instant success. | Retry once or twice; if it persists, fully exit Claude Desktop via the tray and relaunch. To diagnose, enable `WINFS_TRANSPORT_LOG` (below). |
+
+### Diagnosing the 4-minute transport hang (`WINFS_TRANSPORT_LOG`)
+
+Set the `WINFS_TRANSPORT_LOG` environment variable to a file path to enable
+opt-in, **metadata-only** request/response logging at the transport boundary:
+
+```jsonc
+// in claude_desktop_config.json, on the winfs mcpServers entry:
+"env": { "WINFS_TRANSPORT_LOG": "C:\\path\\to\\winfs\\.transport.log" }
+```
+
+When set, winfs appends one line per inbound request and outbound response:
+
+```
+<ISO ts> RECV <id> <method> <bytes>
+<ISO ts> SEND <id> <status> <bytes> <duration-ms>
+```
+
+- **Off by default.** Unset → zero overhead, no behavior change.
+- **Never logs bodies** — only timestamp, JSON-RPC id, method, byte count,
+  status, and winfs processing duration. No file contents, no command output,
+  no secrets.
+- Correlate it with Claude Desktop's own `%APPDATA%\Claude\logs\mcp-server-winfs.log`
+  using `node scripts/analyze-transport-hang.mjs <winfs-log> <cd-log>` to see the
+  per-leg timeline and localize which leg of the transport stalls. Full
+  protocol: [`audit/investigations/v0.9-transport-hang.md`](audit/investigations/v0.9-transport-hang.md).
 
 ### Local working config
 
