@@ -156,16 +156,30 @@ export function isProtocolDowngrade(from: URL, to: URL): boolean {
   return from.protocol === "https:" && to.protocol === "http:";
 }
 
+/** Canonicalize a hostname for whitelist comparison. WHATWG URL parser
+ *  does NOT strip the trailing dot from FQDNs (verified empirically:
+ *  `new URL("https://example.com./").hostname === "example.com."`), but
+ *  DNS treats `example.com` and `example.com.` as the same name. Strip
+ *  the trailing dot on both the URL hostname and each allowlist entry
+ *  so they compare correctly regardless of which form the operator
+ *  used. Also lowercase + trim (P2.8).
+ *  P2.9: previously a request to `example.com.` against an allowlist
+ *  containing only `example.com` was rejected, while a request to
+ *  `example.com` against an allowlist containing only `example.com.`
+ *  was also rejected — neither outcome is what the operator wanted. */
+function canonicalizeHostname(s: string): string {
+  let h = s.trim().toLowerCase();
+  if (h.endsWith(".")) h = h.slice(0, -1);
+  return h;
+}
+
 function validateHostWhitelist(url: URL, config: ResolvedConfig): StructuredError | undefined {
-  const host = url.hostname.toLowerCase();
-  // P2.8: trim AND lowercase. Operator misconfiguration (trailing/leading
-  // whitespace in config) would otherwise silently reject every request to
-  // the affected host. 3/3 reviewer convergence (Codex, Kimi, DeepSeek).
-  const allowed = config.allowedUrlHosts.map((h) => h.trim().toLowerCase());
+  const host = canonicalizeHostname(url.hostname);
+  const allowed = config.allowedUrlHosts.map(canonicalizeHostname);
   if (!allowed.includes(host)) {
     return buildError("EHOSTNOTALLOWED", "host is not in allowedUrlHosts", {
       details: { host, allowed_count: allowed.length },
-      hint: "Add the hostname to config.allowedUrlHosts (exact match, case-insensitive).",
+      hint: "Add the hostname to config.allowedUrlHosts (exact match, case-insensitive; trailing dot ignored).",
     });
   }
   return undefined;
@@ -362,6 +376,26 @@ async function fetchOnce(p: FetchOnceArgs): Promise<FetchOnceResult | Structured
       req = lib.request(httpsOpts, (res) => {
         statusCode = res.statusCode ?? 0;
         contentType = (res.headers["content-type"] as string | undefined) ?? "";
+        // P2.3: we send `Accept-Encoding: identity`. If the server ignores
+        // that and returns a compressed body anyway, byte counts and the
+        // decoded UTF-8 are wrong. Refuse rather than silently corrupt.
+        // Transparent zlib decompression is the "preferred but bigger"
+        // path; deferred until a real workload demands it.
+        const enc = (res.headers["content-encoding"] as string | undefined)?.toLowerCase().trim();
+        if (enc && enc !== "identity") {
+          try { res.destroy(); } catch { /* ignore */ }
+          safeResolve(
+            buildError(
+              "EENCODING_UNSUPPORTED",
+              `server returned Content-Encoding '${enc}'; only identity is supported`,
+              {
+                details: { encoding: enc },
+                hint: "Sent Accept-Encoding: identity but server ignored it.",
+              },
+            ),
+          );
+          return;
+        }
         const cl = parseInt((res.headers["content-length"] as string | undefined) ?? "0", 10);
         if (cl > 0 && cl > p.maxBytes) {
           safeResolve(
@@ -376,8 +410,25 @@ async function fetchOnce(p: FetchOnceArgs): Promise<FetchOnceResult | Structured
           if (typeof loc === "string") {
             redirectTo = loc;
           }
+          // P2.6: don't read body for 3xx hops — we only need status+Location.
+          // Pre-fix the body would stream up to maxBytes for every redirect.
+          try { res.destroy(); } catch { /* ignore */ }
+          safeResolve({
+            statusCode,
+            contentType,
+            body: "",
+            bytesReceived: 0,
+            truncated: false,
+            ...(redirectTo ? { redirectTo } : {}),
+            headersAllowed: allowed,
+          });
+          return;
         }
         res.on("data", (chunk: Buffer) => {
+          // P2.5: late chunks may arrive after safeResolve already fired
+          // (e.g. deadline expired mid-body). Drop them silently so we
+          // don't push to a buffer the response has already disowned.
+          if (settled) return;
           if (received + chunk.length <= p.maxBytes) {
             chunks.push(chunk);
             received += chunk.length;
@@ -466,8 +517,12 @@ export async function fetchUrlImpl(
 
   while (true) {
     if (hops > MAX_REDIRECTS) {
-      return buildError("EHOSTNOTALLOWED", "redirect chain exceeded max hops", {
-        details: { max_redirects: MAX_REDIRECTS, final_url: redactUrlForAudit(currentUrl.toString()) },
+      return buildError("EMAXREDIRECTS", "redirect chain exceeded max hops", {
+        details: {
+          limit: MAX_REDIRECTS,
+          attempted: hops,
+          final_url: redactUrlForAudit(currentUrl.toString()),
+        },
       });
     }
     const remaining = totalDeadline - (Date.now() - overallStart);

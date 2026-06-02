@@ -58,7 +58,12 @@ export const DEFAULT_EXEC_BLOCKLIST: readonly string[] = [
   "Stop-Computer",
   // Forceful process termination
   "Stop-Process\\s.*-Force",
-  "taskkill\\s.*\\/F",
+  // P2.7: narrow `taskkill /F` to require both /F AND /T (tree-force-kill
+  // is the destructive case; a single-PID `/F` is legitimate for callers
+  // who already located the right pid via `tasklist`). Match either flag
+  // order. Bare `/T` (tree-WM_CLOSE) and bare `/F` (single-PID force) stay
+  // unblocked.
+  "taskkill\\s(?:.*\\/F.*\\/T|.*\\/T.*\\/F)",
   // Service / network manipulation
   "net\\s+user\\s+.*\\/add",
   "Add-LocalUser",
@@ -78,8 +83,14 @@ interface CompiledBlocklist {
 let _compiled: CompiledBlocklist | null = null;
 let _compiledKey: string = "";
 
+// P2.3: hash DEFAULT_EXEC_BLOCKLIST into the cache key so a future change
+// that mutated DEFAULT at runtime (or a test that monkey-patches it) won't
+// silently serve a stale compiled list. The key embeds the DEFAULT joined
+// + the extra joined, separated by a delimiter that no pattern uses.
+const DEFAULT_KEY = DEFAULT_EXEC_BLOCKLIST.join("|||");
+
 function compileBlocklist(extra: readonly string[]): CompiledBlocklist {
-  const key = [...extra].join("|||");
+  const key = `${DEFAULT_KEY}###${[...extra].join("|||")}`;
   if (_compiled && _compiledKey === key) return _compiled;
   const patterns: { source: string; regex: RegExp }[] = [];
   for (const p of DEFAULT_EXEC_BLOCKLIST) {

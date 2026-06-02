@@ -15,6 +15,39 @@ const MAX_EDITS = 50;
 const DEFAULT_CONTEXT = 3;
 const DIFF_BODY_CAP_BYTES = 16 * 1024;
 
+/**
+ * v0.9.1 P2.2 — UTF-8 codepoint-boundary-safe byte truncation. Cutting
+ * a UTF-8 buffer mid-sequence emits trailing U+FFFD replacement chars
+ * when decoded. Walk back at most 3 bytes from the cut point to the
+ * last non-continuation byte (start of a sequence). If that sequence
+ * extends past the cut, truncate before it instead — losing one whole
+ * codepoint at the boundary, never a partial one.
+ */
+function safeUtf8Cut(buf: Buffer, maxBytes: number): Buffer {
+  if (buf.length <= maxBytes) return buf;
+  let s = maxBytes - 1;
+  for (let i = 0; i < 4 && s >= 0; i++) {
+    const b = buf[s]!;
+    if ((b & 0xc0) !== 0x80) {
+      // s is a sequence start byte. Sequence length per UTF-8 spec:
+      //   0xxxxxxx → 1, 110xxxxx → 2, 1110xxxx → 3, 11110xxx → 4.
+      const seqLen =
+        (b & 0x80) === 0 ? 1 :
+        (b & 0xe0) === 0xc0 ? 2 :
+        (b & 0xf0) === 0xe0 ? 3 :
+        (b & 0xf8) === 0xf0 ? 4 : 1;
+      if (s + seqLen <= maxBytes) {
+        return buf.subarray(0, maxBytes);
+      }
+      return buf.subarray(0, s);
+    }
+    s--;
+  }
+  // Malformed UTF-8 (4+ continuation bytes in a row at the tail): cut
+  // at maxBytes and let Node emit U+FFFD per its standard contract.
+  return buf.subarray(0, maxBytes);
+}
+
 const InputShape = {
   path: AbsolutePath,
   edits: z
@@ -86,6 +119,15 @@ interface EditFileAuditExtras {
   bytes_after: number;
 }
 
+/**
+ * v0.9.1 P2.3 convention: audit extras flow from impl → runTool by
+ * sharing the SAME `result.value` object instance via this WeakMap.
+ * If a future wrapping layer clones/destructures `result.value`
+ * between impl return and `auditExtras` callback, the lookup will
+ * miss and the audit entry will lose the extras. Spec §AB sets the
+ * "do not clone result.value across the impl/runTool boundary" rule;
+ * this comment is the local enforcement reminder.
+ */
 const auditByResult = new WeakMap<object, EditFileAuditExtras>();
 
 export function getEditFileAuditExtras(value: EditFileResult): EditFileAuditExtras | undefined {
@@ -225,9 +267,10 @@ export async function editFileImpl(
       "after",
       { context: DEFAULT_CONTEXT },
     );
-    if (Buffer.byteLength(diff, "utf8") > DIFF_BODY_CAP_BYTES) {
-      const head = Buffer.from(diff, "utf8").subarray(0, DIFF_BODY_CAP_BYTES).toString("utf8");
-      const dropped = Buffer.byteLength(diff, "utf8") - Buffer.byteLength(head, "utf8");
+    const diffBuf = Buffer.from(diff, "utf8");
+    if (diffBuf.length > DIFF_BODY_CAP_BYTES) {
+      const head = safeUtf8Cut(diffBuf, DIFF_BODY_CAP_BYTES).toString("utf8");
+      const dropped = diffBuf.length - Buffer.byteLength(head, "utf8");
       diff = `${head}... [${dropped} more bytes truncated]\n`;
       truncatedDiff = true;
     }

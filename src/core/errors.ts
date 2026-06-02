@@ -32,7 +32,10 @@ export type ErrorCode =
   | "EEXT_NOT_JSON" // write_json: path does not end in .json (case-insensitive)
   // v0.7 wave 2b — process control suite
   | "ENOSESSION" // start_process / interact / kill_process: session_id not in registry
-  | "EPIPE_CLOSED"; // interact: stdin already closed (finalize prior, or child settled)
+  | "EPIPE_CLOSED" // interact: stdin already closed (finalize prior, or child settled)
+  // v0.9.1 — fetch_url
+  | "EMAXREDIRECTS" // fetch_url: redirect-chain hop count exceeded MAX_REDIRECTS
+  | "EENCODING_UNSUPPORTED"; // fetch_url: server returned Content-Encoding we don't decode (gzip/deflate/br)
 
 export interface StructuredError {
   ok: false;

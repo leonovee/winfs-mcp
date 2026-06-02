@@ -90,7 +90,15 @@ export async function executeCommandImpl(
   if (args.cwd !== undefined) {
     const cwdCheck = await checkAllowed(args.cwd, config);
     if ("ok" in cwdCheck && cwdCheck.ok === false) return cwdCheck;
-    cwd = (cwdCheck as { realPath: string }).realPath;
+    // P2.8: discriminant check instead of unsafe cast — if checkAllowed's
+    // return shape ever loses `realPath`, the failure is at type-check
+    // time (or a clear runtime error) instead of a silent undefined cwd.
+    if (!("realPath" in cwdCheck) || typeof cwdCheck.realPath !== "string") {
+      return buildError("EIO", "checkAllowed succeeded but did not return realPath", {
+        details: { cwd: args.cwd },
+      });
+    }
+    cwd = cwdCheck.realPath;
     // Verify it's actually a directory.
     try {
       const st = await fs.stat(cwd);
@@ -231,7 +239,10 @@ Security defenses (spec invariants Step 1 #7–#12):
   \`config.execSanitizeEnv: true\`.
 - cwd must be inside allowedRoots (default: allowedRoots[0]).
 - Hard deadline with SIGTERM → SIGKILL escalation; process tree killed on
-  Windows via \`taskkill /F /T /PID\`.
+  Windows via \`taskkill /F /T /PID\`. Best-effort: detached grandchildren
+  that escape the process group (e.g. via Win32 \`DETACHED_PROCESS\` flag
+  or PowerShell \`Start-Process -WindowStyle Hidden\` without \`-Wait\`)
+  are NOT terminated by \`/T\`.
 - Per-stream output cap (\`config.execMaxOutputBytes\`, default 1 MB).
   Excess bytes dropped; cap-hit kills the subprocess; \`truncated_*\` flags
   set in response.
