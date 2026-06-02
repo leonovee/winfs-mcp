@@ -37,6 +37,11 @@ describe("core/exec_safety PATHEXT hardening (Phase C)", () => {
     expect(env.PATHEXT).toContain(".EXE");
   });
 
+  it("sets GIT_TERMINAL_PROMPT=0 in both modes (Phase E — git never hangs on a credential prompt)", () => {
+    expect(buildExecEnv(cfg({ execSanitizeEnv: false })).GIT_TERMINAL_PROMPT).toBe("0");
+    expect(buildExecEnv(cfg({ execSanitizeEnv: true })).GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
   it("still overrides PATH/Path with the sanitized path in both modes (no regression)", () => {
     const def = buildExecEnv(cfg({ execSanitizeEnv: false }));
     expect(def.PATH).toContain("System32");

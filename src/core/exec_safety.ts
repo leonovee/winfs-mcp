@@ -188,6 +188,9 @@ export function buildExecEnv(config: ResolvedConfig): NodeJS.ProcessEnv {
       // Phase C: pin PATHEXT (sanitize mode previously dropped it entirely,
       // which also breaks bare-name resolution).
       PATHEXT: STANDARD_WINDOWS_PATHEXT,
+      // Phase E: a git invoked via execute_command must never block on a
+      // credential prompt waiting on a terminal that isn't there.
+      GIT_TERMINAL_PROMPT: "0",
     };
     if (process.env.USERPROFILE) env.USERPROFILE = process.env.USERPROFILE;
     if (process.env.LOCALAPPDATA) env.LOCALAPPDATA = process.env.LOCALAPPDATA;
@@ -202,6 +205,8 @@ export function buildExecEnv(config: ResolvedConfig): NodeJS.ProcessEnv {
     PATH: sanitizedPathVar,
     Path: sanitizedPathVar,
     PATHEXT: STANDARD_WINDOWS_PATHEXT,
+    // Phase E: disable git's interactive credential prompt (see above).
+    GIT_TERMINAL_PROMPT: "0",
   };
 }
 

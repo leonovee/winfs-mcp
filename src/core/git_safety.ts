@@ -115,6 +115,21 @@ export interface GitSpawnResult {
   timedOut: boolean;
 }
 
+/**
+ * Env for git spawns (Phase C+E). Pins PATHEXT so bare-name `git` resolves
+ * under a mangled inherited .CPL, and sets GIT_TERMINAL_PROMPT=0 so an
+ * authenticated op can't hang waiting on a credential prompt (git tools are
+ * also hard read-only via GIT_MUTATION_FLAGS). PATH is left inherited — git
+ * tools do not use the sanitized PATH (switching them is a separate change).
+ */
+export function gitSpawnEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATHEXT: STANDARD_WINDOWS_PATHEXT,
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
 export async function spawnGit(
   args: readonly string[],
   cwd: string,
@@ -133,10 +148,8 @@ export async function spawnGit(
       cwd,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
-      // Phase C: pin PATHEXT (bare-name `git` resolution must survive a
-      // mangled inherited .CPL). PATH is left inherited (git tools are
-      // hard read-only; switching to sanitizedPath is a separate change).
-      env: { ...process.env, PATHEXT: STANDARD_WINDOWS_PATHEXT },
+      // Phase C+E: pinned PATHEXT + GIT_TERMINAL_PROMPT=0 (see gitSpawnEnv).
+      env: gitSpawnEnv(),
     });
 
     const timer = setTimeout(() => {
