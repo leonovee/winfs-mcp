@@ -1178,6 +1178,57 @@ async function probesTransportLog() {
   return results;
 }
 
+// ────── v0.10 child-spawn hardening (PATHEXT / stdout / GIT_TERMINAL_PROMPT) ──
+
+async function probesSpawnHardening() {
+  // Spawn the server with a MANGLED parent PATHEXT (.CPL) — the exact
+  // Claude-Desktop symptom that broke bare-name resolution. Phase C must
+  // correct PATHEXT inside spawned children; Phase E sets GIT_TERMINAL_PROMPT.
+  const results = [];
+  const srv = spawnServer(path.join(WINFS, "configs", "local.json"), { PATHEXT: ".CPL" });
+  try {
+    await handshake(srv);
+
+    // Phase C: the PowerShell child sees a corrected PATHEXT, not the .CPL it
+    // would have inherited.
+    let r = await call(srv, "execute_command", {
+      command: "Write-Output $env:PATHEXT", args: [], cwd: WINFS,
+    });
+    let sc = parseSuccessContent(r);
+    const pathext = (sc?.stdout ?? "").trim();
+    results.push(
+      !isError(r) && /\.EXE/i.test(pathext) && pathext.toUpperCase() !== ".CPL"
+        ? ok("v0.10 Phase C: child PATHEXT corrected under mangled .CPL parent", `PATHEXT=${pathext.slice(0, 40)}…`)
+        : fail("v0.10 Phase C: child PATHEXT corrected under mangled .CPL parent", "PATHEXT contains .EXE (not .CPL)", isError(r) ? parseErrorContent(r) : sc),
+    );
+
+    // Phase C + D: a bare-name command resolves AND returns non-empty stdout
+    // even under the mangled parent PATHEXT (the empty-output / not-recognized
+    // regression at the wire level).
+    r = await call(srv, "execute_command", { command: "node --version", args: [], cwd: WINFS });
+    sc = parseSuccessContent(r);
+    results.push(
+      !isError(r) && sc?.exit_code === 0 && /^v\d+\.\d+\.\d+/.test((sc?.stdout ?? "").trim())
+        ? ok("v0.10 Phase C/D: bare `node --version` resolves + non-empty stdout under mangled PATHEXT", `stdout=${(sc.stdout ?? "").trim()}`)
+        : fail("v0.10 Phase C/D: bare `node --version` resolves + non-empty stdout", "exit 0 + stdout /^v\\d+/", isError(r) ? parseErrorContent(r) : sc),
+    );
+
+    // Phase E: git's interactive credential prompt is disabled in the child env.
+    r = await call(srv, "execute_command", {
+      command: "Write-Output $env:GIT_TERMINAL_PROMPT", args: [], cwd: WINFS,
+    });
+    sc = parseSuccessContent(r);
+    results.push(
+      !isError(r) && (sc?.stdout ?? "").trim() === "0"
+        ? ok("v0.10 Phase E: GIT_TERMINAL_PROMPT=0 in child env", "0")
+        : fail("v0.10 Phase E: GIT_TERMINAL_PROMPT=0 in child env", "'0'", isError(r) ? parseErrorContent(r) : sc),
+    );
+  } finally {
+    await srv.stop();
+  }
+  return results;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 
 async function runStrictPass() {
@@ -1360,18 +1411,30 @@ async function main() {
     tlogResults = [{ name: "v0.9 #3: transport-log pass", pass: false, expected: "complete", got: String(e) }];
   }
 
+  // v0.10 child-spawn hardening — own pass (server spawned with a mangled
+  // PATHEXT parent env).
+  let hardenResults;
+  console.log("\n========== v0.10 SPAWN-HARDENING PASS ==========");
+  try {
+    hardenResults = await probesSpawnHardening();
+  } catch (e) {
+    console.error("SPAWN-HARDENING pass crashed:", e);
+    hardenResults = [{ name: "v0.10 spawn-hardening pass", pass: false, expected: "complete", got: String(e) }];
+  }
+
   await cleanupSandbox();
 
   const s = printReport("STRICT mode results", strictResults);
   const u = printReport("UNRESTRICTED mode results", unrestrictedResults);
   const v = printReport("v0.9 MCP-Roots results", rootsResults);
   const t = printReport("v0.9 #3 transport-log results", tlogResults);
-  const totalPass = s.pass + u.pass + v.pass + t.pass;
-  const totalFail = s.fails + u.fails + v.fails + t.fails;
-  const totalSkip = s.skipped + u.skipped + v.skipped + t.skipped;
+  const h = printReport("v0.10 spawn-hardening results", hardenResults);
+  const totalPass = s.pass + u.pass + v.pass + t.pass + h.pass;
+  const totalFail = s.fails + u.fails + v.fails + t.fails + h.fails;
+  const totalSkip = s.skipped + u.skipped + v.skipped + t.skipped + h.skipped;
   const totalCount = totalPass + totalFail;
   const dur = Date.now() - t0;
-  console.log(`\n=== OVERALL: ${totalPass}/${totalCount} probes green (strict ${s.pass}/${s.pass + s.fails}, unrestricted ${u.pass}/${u.pass + u.fails}, mcp-roots ${v.pass}/${v.pass + v.fails}, transport-log ${t.pass}/${t.pass + t.fails})`);
+  console.log(`\n=== OVERALL: ${totalPass}/${totalCount} probes green (strict ${s.pass}/${s.pass + s.fails}, unrestricted ${u.pass}/${u.pass + u.fails}, mcp-roots ${v.pass}/${v.pass + v.fails}, transport-log ${t.pass}/${t.pass + t.fails}, spawn-hardening ${h.pass}/${h.pass + h.fails})`);
   console.log(`    skipped: ${totalSkip}`);
   console.log(`    duration: ${dur}ms`);
   if (totalFail > 0) process.exit(1);
