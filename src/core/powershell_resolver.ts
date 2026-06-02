@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { ResolvedConfig } from "./config.js";
+import { STANDARD_WINDOWS_PATHEXT } from "./exec_safety.js";
 
 /**
  * v0.9.1 Phase B — central PowerShell binary resolution.
@@ -46,8 +47,13 @@ export function resolvePowershellBin(config: ResolvedConfig): string {
     return _cached;
   }
 
-  // 2. Probe for pwsh.exe via `where`.
-  const probe = spawnSync("where", ["pwsh"], { encoding: "utf8", timeout: 5000 });
+  // 2. Probe for pwsh.exe via `where`. Pin PATHEXT (Phase C) so the bare-name
+  //    `where` resolves even under a mangled inherited PATHEXT (.CPL).
+  const probe = spawnSync("where", ["pwsh"], {
+    encoding: "utf8",
+    timeout: 5000,
+    env: { ...process.env, PATHEXT: STANDARD_WINDOWS_PATHEXT },
+  });
   if (probe.status === 0 && probe.stdout) {
     const candidates = probe.stdout
       .split(/\r?\n/)

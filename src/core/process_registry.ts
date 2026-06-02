@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { ResolvedConfig } from "./config.js";
-import { buildExecEnv } from "./exec_safety.js";
+import { buildExecEnv, STANDARD_WINDOWS_PATHEXT } from "./exec_safety.js";
 
 /**
  * v0.7 wave 2b: stateful in-memory process registry. First long-lived
@@ -488,7 +488,13 @@ export class ProcessRegistry {
     if (process.platform === "win32") {
       try {
         const args = force ? ["/F", "/T", "/PID", String(pid)] : ["/T", "/PID", String(pid)];
-        const killer = spawn("taskkill", args, { windowsHide: true, stdio: "ignore" });
+        // Phase C: pin PATHEXT so bare-name `taskkill` resolves under a
+        // mangled inherited .CPL (else the session kill itself would fail).
+        const killer = spawn("taskkill", args, {
+          windowsHide: true,
+          stdio: "ignore",
+          env: { ...process.env, PATHEXT: STANDARD_WINDOWS_PATHEXT },
+        });
         killer.on("error", () => {
           try {
             child.kill(force ? "SIGKILL" : "SIGTERM");

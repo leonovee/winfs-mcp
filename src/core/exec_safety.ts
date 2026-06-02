@@ -76,6 +76,19 @@ export const DEFAULT_EXEC_BLOCKLIST: readonly string[] = [
   "wget\\s.*\\|\\s*(bash|sh|pwsh|powershell)",
 ];
 
+/**
+ * Standard Windows PATHEXT, set explicitly on every spawn env (Phase C,
+ * child-spawn hardening). Under Claude Desktop on Windows the inherited
+ * PATHEXT was observed mangled to `.CPL`, which makes libuv's bare-name
+ * executable resolution fail (`git`/`node`/`where`/`taskkill` →
+ * CommandNotFoundException / spawn ENOENT) even though the directory is on
+ * PATH. We NEVER forward the inherited PATHEXT; we pin this standard list so
+ * bare-name resolution is deterministic regardless of the parent env. The
+ * value matches the Windows default PATHEXT.
+ */
+export const STANDARD_WINDOWS_PATHEXT =
+  ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC";
+
 interface CompiledBlocklist {
   patterns: { source: string; regex: RegExp }[];
 }
@@ -172,6 +185,9 @@ export function buildExecEnv(config: ResolvedConfig): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       PATH: sanitizedPathVar,
       Path: sanitizedPathVar, // Windows case-insensitive variant
+      // Phase C: pin PATHEXT (sanitize mode previously dropped it entirely,
+      // which also breaks bare-name resolution).
+      PATHEXT: STANDARD_WINDOWS_PATHEXT,
     };
     if (process.env.USERPROFILE) env.USERPROFILE = process.env.USERPROFILE;
     if (process.env.LOCALAPPDATA) env.LOCALAPPDATA = process.env.LOCALAPPDATA;
@@ -179,7 +195,14 @@ export function buildExecEnv(config: ResolvedConfig): NodeJS.ProcessEnv {
     if (process.env.TEMP) env.TEMP = process.env.TEMP;
     return env;
   }
-  return { ...process.env, PATH: sanitizedPathVar, Path: sanitizedPathVar };
+  // Phase C: override the inherited PATHEXT (observed mangled to `.CPL` under
+  // Claude Desktop) so bare-name executable resolution is deterministic.
+  return {
+    ...process.env,
+    PATH: sanitizedPathVar,
+    Path: sanitizedPathVar,
+    PATHEXT: STANDARD_WINDOWS_PATHEXT,
+  };
 }
 
 export interface SpawnSubprocessOptions {
@@ -293,6 +316,10 @@ export async function spawnSubprocess(
           const killer = spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
             windowsHide: true,
             stdio: "ignore",
+            // Phase C: pin PATHEXT so bare-name `taskkill` still resolves even
+            // when the inherited PATHEXT is mangled (.CPL) — otherwise the
+            // kill itself would fail and the child would wedge.
+            env: { ...process.env, PATHEXT: STANDARD_WINDOWS_PATHEXT },
           });
           killer.on("error", () => {
             try {

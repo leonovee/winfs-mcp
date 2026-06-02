@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import type { ResolvedConfig } from "./config.js";
 import { checkAllowed } from "./allowed_roots.js";
 import { buildError, type StructuredError } from "./errors.js";
+import { STANDARD_WINDOWS_PATHEXT } from "./exec_safety.js";
 
 /**
  * Hardcoded mutation-flag denylist for git read-only tools. Spec invariant
@@ -132,6 +133,10 @@ export async function spawnGit(
       cwd,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
+      // Phase C: pin PATHEXT (bare-name `git` resolution must survive a
+      // mangled inherited .CPL). PATH is left inherited (git tools are
+      // hard read-only; switching to sanitizedPath is a separate change).
+      env: { ...process.env, PATHEXT: STANDARD_WINDOWS_PATHEXT },
     });
 
     const timer = setTimeout(() => {
