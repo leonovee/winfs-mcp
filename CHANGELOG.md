@@ -5,6 +5,74 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-06-03 — first stable release
+
+The 0.x arc lands. winfs is a secure Windows-10/11 MCP server: **39 tools**
+(filesystem, read-only git, sandboxed exec/python/pytest, persistent process
+sessions, SSRF-guarded fetch, media/JSON) — every one bounded by an
+allowed-roots whitelist, atomic temp+fsync+rename writes, hard timeouts, a
+PowerShell destructive-command blocklist, and a redacting audit log. The tool
+surface has been **frozen at 39 since v0.8**; v1.0.0 adds **no new tools** — it
+is the hardening, packaging, and honesty cut.
+
+### What 1.0.0 is
+
+- **MCPB packaging (from v0.10.2).** One-file drag-install for Claude Desktop
+  (`winfs-1.0.0.mcpb`): `mcpb/manifest.json` + a `mcpb/launch.mjs` shim that maps
+  the install-time `user_config` onto the same runtime config **without bypassing
+  enforcement** (invariant #45). `npm run mcpb` builds it; `mcpb-smoke.mjs`
+  extracts the packed archive and proves it installs + refuses out-of-root reads.
+  The manual `--config` path is unchanged and coexists.
+- **GPT-review hardening (from v0.10.3 + this cut).** An external review's real
+  findings, all closed:
+  - **ssh_exec** gained an enforced `config.allowedSshHosts` allowlist; the
+    `ssh -G` check is honestly relabelled *resolvability validation* (it never
+    was a whitelist — invariant #35 corrected).
+  - **copy** now honors unrestricted mode (was skipping every child as
+    "outside allowedRoots").
+  - **Audit content redaction by digest (invariant #46).** Script bodies,
+    composed/ssh/process commands, file-chunk content, and subprocess
+    stdout/stderr are written to the audit log as **SHA-256 + byte length**, never
+    a prefix (a prefix can leak a secret on line 1). New `config.auditVerbose`
+    (default false) restores prefixes for debugging. Closed across every exec,
+    process, and file tool — including `start_process` (whose caller-facing
+    output `command_prefix` is intentionally kept).
+- **CI.** GitHub Actions on windows-latest × Node 18/20/22: `npm ci` → build →
+  test → `npm audit --omit=dev` (gate) + full audit (report-only).
+- **Honest, reconciled docs.** README rewrite (MCPB-first install), the spec
+  amendment log through §AE, a complete acceptance-report chain v0.1 → v0.10, and
+  v1.0 framing that no longer over-claims. The full 10-question eval-suite *run*
+  is a documented **post-1.0 backlog** item (spec §10), not a release gate.
+
+### The 0.x arc (tool surface)
+
+Core FS (v0.1) → mutations + batch + introspection (v0.2) → search + audit_tail
+(v0.3) → editor + slicing + diff + tail (v0.4) → git RO + exec + system + network
+(v0.5) → byte-offset I/O + unrestricted mode (v0.6) → ssh/process-control + DC
+parity (v0.7) → filesystem-MCP parity, surface → 39 (v0.8) → MCP Roots (v0.9) →
+child-spawn hardening + timeout-ceiling (v0.10) → packaging + review hardening
+(v1.0).
+
+### Security posture (always-on invariants)
+
+UTF-8 no-BOM I/O; realpath→allowed-roots before every access (no existence
+leak); bounded timeouts with abort; atomic writes; structured errors as content
+(handlers never throw); redacting audit log; two-layer `fetch_url` SSRF defense;
+exec blocklist; MCP-Roots union (#42); spawn PATHEXT pinning (#43); audit digest
+redaction (#46). `npm audit`: **0** (prod and full).
+
+### Verification
+
+**544 tests** in 98 files, **79/79** wire-level smoke (strict/unrestricted/
+mcp-roots/transport-log/spawn-hardening), **9/9** MCPB bundle smoke (reports
+1.0.0), `tsc` clean.
+
+### Deferred (post-1.0 backlog)
+
+Full eval-suite run (`evals/`): finalise the 10-question suite + `run.py`, target
+≥ 8/10 through MCP. The Claude-Desktop ↔ winfs large-payload transport stalls
+remain an upstream-transport investigation (#3), not a winfs defect.
+
 ## [0.10.3] — 2026-06-03 — GPT-review fix wave (ssh allowlist, copy, audit, CI)
 
 An external (GPT) review surfaced three real defects, a missing CI pipeline, and
