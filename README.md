@@ -400,12 +400,14 @@ Copy-Item configs/default.json configs/local.json
 npx @modelcontextprotocol/inspector node dist/index.js -- --config configs/local.json
 ```
 
-#### `sshExePath` override (for non-standard OpenSSH installs)
+#### `sshExePath` — ssh binary (auto-detected; override for non-standard installs)
 
-By default `ssh_exec` uses `C:\Windows\System32\OpenSSH\ssh.exe`. To
-override — for example to use Git-bundled OpenSSH at
-`C:\Program Files\Git\usr\bin\ssh.exe`, or MSYS2 at
-`C:\msys64\usr\bin\ssh.exe` — add `"sshExePath"` to your local config:
+Since v0.10.1 `sshExePath` is **optional**. When unset, `ssh_exec`
+**auto-detects** the ssh binary, preferring the Git-bundled
+`C:\Program Files\Git\usr\bin\ssh.exe` over `C:\Windows\System32\OpenSSH\ssh.exe`
+(the System32 client exits 255 on some hosts), then PATH. Set `sshExePath`
+explicitly to pin a specific binary — for example MSYS2 at
+`C:\msys64\usr\bin\ssh.exe`:
 
 ```json
 {
@@ -415,9 +417,24 @@ override — for example to use Git-bundled OpenSSH at
 ```
 
 Note that `configs/local.json` is gitignored; create or edit it as
-needed for your machine. `ssh_exec` returns `ESSHNOTFOUND` if the path
-does not exist on disk, so a typo is caught at the first call rather
-than silently falling back.
+needed for your machine. An explicitly-set `sshExePath` is used strictly:
+`ssh_exec` returns `ESSHNOTFOUND` if it does not exist on disk, so a typo is
+caught at the first call rather than silently falling back to auto-detect.
+
+#### `execExtraPathDirs` — extra PATH dirs for non-standard tool installs
+
+`execute_command` / `run_python` / `run_pytest` run with a **sanitized** PATH
+(System32, the standard Git/Node/PowerShell locations, optional `pythonHome`) —
+the user's `$PATH` is deliberately not inherited. If a tool lives elsewhere
+(portable Git, MSYS2, a chocolatey shim), add its directory to
+`execExtraPathDirs` so bare-name resolution finds it:
+
+```json
+{
+  "allowedRoots": ["C:\\Users\\me\\src"],
+  "execExtraPathDirs": ["C:\\tools\\git\\cmd", "C:\\msys64\\usr\\bin"]
+}
+```
 
 #### `powershellExePath` override (PowerShell binary selection)
 

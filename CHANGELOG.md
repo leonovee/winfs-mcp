@@ -5,6 +5,54 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-06-03 — final polish: timeout ceiling, ssh auto-detect, P2 closeout
+
+A wrap-up patch wave: a high-impact timeout-ceiling fix, ssh binary
+auto-detection, and closure of the residual deferred-P2 findings.
+
+### Fixed
+
+- **Timeout ceiling (HIGH)** — `execute_command` with a high `timeout_ms`
+  still died at ~10 s ("exceeded 10000ms"). Root cause was the OUTER timeout in
+  `runTool`, which clamped every tool to `config.defaultTimeoutMs`/`maxTimeoutMs`
+  regardless of the per-call `timeout_ms` (the v0.10.0 change had fixed only the
+  inner spawn deadline). `runTool` now accepts a `ctx.maxTimeoutMs` ceiling
+  override; `execute_command`, `run_python`, `run_pytest`, and `ssh_exec`
+  coordinate their outer/inner deadlines so the graceful inner timeout fires
+  first. A 6–8 min build is now runnable via a high `timeout_ms`. The separate
+  ~4-min Claude Desktop MCP-transport ceiling is upstream and is NOT this valve.
+- **`ssh_exec` binary** — the hardcoded System32 OpenSSH default exits 255 on
+  some hosts. `sshExePath` is now optional; when unset, `resolveSshBin`
+  auto-detects, preferring the Git-bundled `C:\Program Files\Git\usr\bin\ssh.exe`
+  over System32, then PATH. An explicit `sshExePath` is still honored strictly.
+  `ssh_exec`'s own 300 s max is now honored (was clamped to 60 s by the same
+  outer-ceiling bug).
+- **grep P2.7** — a single very long line (no newline) was stored uncapped in
+  `match.match`/context (memory-pressure DoS). Lines are now capped at 4096
+  chars with a surrogate-safe truncation marker.
+
+### Added
+
+- **`shellMaxTimeoutMs` default raised 300000 → 600000** (10 min) so long
+  builds fit; documented hard max on the `execute_command` `timeout_ms` field.
+- **`execExtraPathDirs` config** (default `[]`) — extra absolute dirs appended
+  to the sanitized subprocess PATH for non-standard tool installs (portable
+  Git, MSYS2, chocolatey). Operator opt-in; the user's `$PATH` is still not
+  inherited (execute_command P2.4).
+
+### Changed
+
+- `config.sshExePath`: now optional (was defaulted to the System32 path).
+
+### Docs
+
+- Deferred-P2 closeout recorded in
+  `audit/external_reviews/v0.7-pre-tag/_post-v0.9.0-status.md`:
+  execute_command P2.2 and edit_file P2.3 doc-closed (theoretical / already
+  surfaced); fetch_url P2.1 (`truncated`-flag rename) **intentionally
+  deferred** — rename-only, not worth churning a stable contract. True
+  fire-and-forget detached exec assessed and deferred (> 1 commit).
+
 ## [0.10.0] — 2026-06-02 — child-spawn hardening + transport logging
 
 Hardens the child-process spawn layer against the real Claude-Desktop-on-Windows

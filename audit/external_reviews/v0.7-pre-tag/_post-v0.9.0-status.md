@@ -268,3 +268,51 @@ Of the 30 originally-deferred P2s, after v0.9.1: **at most 5 unaddressed**
 (execute_command P2.2 / P2.4 / grep P2.7 / edit_file P2.3 / possibly
 edit_file P2.4 if it punts). All are documented; all are non-blocking;
 all are tracked here for a future patch.
+
+---
+
+## v0.10.1 final-polish closures (this wave)
+
+Re-triaged against current `main` and closed the residual deferrals:
+
+| Item | Disposition (v0.10.1) |
+|---|---|
+| edit_file P2.4 (TOCTOU) | **CLOSED earlier** — `fix(edit_file): narrow TOCTOU race via fd-based stat+read` (commit `6fda71f`). |
+| execute_command P2.3 / P2.7 / P2.8 | **CLOSED in v0.9.1** (blocklist cache-key hash, taskkill /F /T narrowing, discriminant cast). Verified in source. |
+| edit_file P2.2 (UTF-8 boundary) | **CLOSED in v0.9.1** (`safeUtf8Cut`). Verified. |
+| **grep P2.7** (uncapped match line) | **CLOSED** — `capLine` caps stored match + context lines at 4096 chars with a surrogate-safe marker. |
+| **execute_command P2.4** (non-standard git PATH) | **CLOSED** — new `execExtraPathDirs` config (operator opt-in; `$PATH` still not inherited). |
+| **execute_command P2.2** (argv quoting burden) | **DOC-CLOSED** — the `args` schema already states "NOT passed as positional pwsh args (those would require shell quoting we don't perform)." Caller burden is surfaced; eager metacharacter validation would false-positive on deliberate composition. No code change. |
+| **edit_file P2.3** (auditByResult WeakMap) | **DOC-CLOSED** — theoretical only; no bug under expected use (runTool passes the same `result` object to `auditExtras`, no clone between impl and wrapper). Already documented at `edit_file.ts:122-129` + spec §AB convention "do not clone result.value across the impl/runTool boundary." |
+| **fetch_url P2.1** (`truncated` flag rename) | **INTENTIONALLY DEFERRED** — rename-only with no second reason. Not worth churning a stable API contract (and its one-release back-compat alias) just to rename a field. Revisit only if a real second driver appears. |
+
+**Residual P2s after v0.10.1: 1 — fetch_url P2.1, intentionally deferred.**
+
+## New bugs fixed this wave (not P2 findings)
+
+- **Timeout ceiling** (HIGH): `runTool`'s outer `withTimeout` clamped
+  execute_command / run_python / run_pytest / ssh_exec to the general
+  default/max even when a longer `timeout_ms` was passed ("exceeded 10000ms").
+  Added `ctx.maxTimeoutMs`; exec tools now coordinate outer/inner deadlines;
+  `shellMaxTimeoutMs` default raised 300000 → 600000 (10 min) for long builds.
+  The separate ~4-min Claude Desktop MCP-transport ceiling is upstream, NOT
+  conflated.
+- **ssh binary** : System32 OpenSSH (the old hardcoded default) exits 255 on
+  some hosts; `resolveSshBin` now auto-detects the Git-bundled ssh (preferred)
+  when `sshExePath` is unset.
+
+## Deferred (assessed, > 1 focused commit — NOT in this wrap-up wave)
+
+- **Fire-and-forget / true detached exec** (reported item 7): `Start-Process`
+  without `-Wait` can still hold execute_command open until timeout when a
+  grandchild keeps an inherited stdio pipe open (the `close` event waits on
+  the pipe, not just the direct child). A real fix is a `detached` mode that
+  spawns with `stdio: 'ignore'` + `detached: true` + `child.unref()`, returns
+  the PID immediately, and does NOT wait on `close`. That is **more than one
+  focused commit**: a new schema param, a distinct detached spawn path in
+  exec_safety (no stdio capture), a divergent response shape (pid-only, no
+  stdout/exit_code), tests, and a decision on whether it belongs on
+  execute_command, start_process (which already returns immediately but holds
+  pipes + an armTimeout + a concurrency slot), or a new tool. Deferred to its
+  own wave per the wrap-up scope. Workaround today: `start_process` for
+  background processes you intend to poll via `interact`.

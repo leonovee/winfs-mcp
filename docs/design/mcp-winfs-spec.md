@@ -1630,3 +1630,57 @@ The server does NOT need to declare any capability to RECEIVE client roots — t
 `effectiveAllowedRoots = union(config.allowedRoots, RootsResolver.clientRoots())`. Union chosen over replace for safety: client roots can only widen access, never silently remove paths the operator explicitly trusted via config. Empty client root set degrades to config-only access. Client roots validated at `setClientRoots` — absolute, existing directory, symlinks resolved per reference server's dual-path-storage pattern. Invalid roots skipped with warnings; valid ones still apply. Audit records `_client_roots_updated` events with count only, never paths. Applies to all path-bound tools through their unchanged read of `config.resolvedAllowedRoots`, which the resolver mutates in place. Generalises invariant #36 (ProcessRegistry-only shared mutable state): `config.resolvedAllowedRoots` is now also shared mutable state, but with `RootsResolver` as its single owner.
 
 **Wave summary.** Spec invariant set grew from #41 to #42 (+1). One new core module (`RootsResolver`) and one new `ToolContext` field (`rootsResolver`). The `checkAllowed` signature, all 39 register*Tool signatures, and every `*Impl` signature stay unchanged — the resolver mutates the live `config.resolvedAllowedRoots` array so existing readers automatically pick up the union. User-facing behaviour: with an MCP-Roots-aware client, paths inside client-signalled project roots are accessible without `config.json` edit + Claude Desktop restart. Version bump 0.8.0 → 0.9.0.
+
+### 2026-06-02 / 2026-06-03 — v0.10.0 child-spawn hardening + v0.10.1 final polish
+
+**§AB.4. Convention: do not clone `result.value` across the impl→runTool boundary.**
+
+Several tools (`execute_command`, `edit_file`) attach audit-only metadata to the
+success value via a module-level `WeakMap<object, …>` keyed by the `result.value`
+object identity (`getEditFileAuditExtras` / `getExecuteCommandAuditExtras`). `runTool`
+reads it by passing the SAME `result` object to the `auditExtras` callback before
+`successResponse(result.value)`. The convention: **no layer between an `*Impl`'s
+return and `runTool`'s `auditExtras` callback may clone, spread, or otherwise
+replace `result.value`** — doing so breaks the WeakMap lookup and silently drops
+the audit extras (deferred finding edit_file P2.3, assessed as theoretical: no
+current code violates this; the WeakMap pattern is sound under the convention).
+Closes the dangling "Spec §AB sets the rule" reference in `edit_file.ts`.
+
+**Invariant #43 — every spawn sets an explicit standard PATHEXT (v0.10.0).**
+
+Under Claude Desktop on Windows the inherited `PATHEXT` was observed mangled to
+`.CPL`, breaking libuv bare-name executable resolution (`git`/`node`/`where`/
+`taskkill` → not found) despite the directory being on PATH. **winfs MUST NOT
+forward the inherited PATHEXT.** Every spawn pins
+`STANDARD_WINDOWS_PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"`:
+`buildExecEnv` (both branches — covers `spawnSubprocess` and `ProcessRegistry.spawn`),
+`gitSpawnEnv` (also sets `GIT_TERMINAL_PROMPT=0`), the internal `taskkill` spawns,
+and the `where pwsh` resolver probe. Session spawns re-pin PATH/Path/PATHEXT AFTER
+the caller's `extraEnv` (`buildSessionEnv`) so a `start_process` caller cannot
+clobber the hardening. The sanitized PATH (invariant Step 1 #10 — user `$PATH`
+not inherited) is preserved; `execExtraPathDirs` (v0.10.1) appends operator-supplied
+dirs for non-standard tool installs without inheriting `$PATH`.
+
+**Invariant #44 — one-shot exec deadlines coordinate outer and inner timers (v0.10.1).**
+
+`runTool` wraps every impl in an OUTER `withTimeout`. For the exec tools
+(`execute_command`, `run_python`, `run_pytest`, `ssh_exec`) the registration MUST
+set `ctx.timeoutMs` = the resolved per-call deadline and (when it can exceed the
+general `config.maxTimeoutMs`) `ctx.maxTimeoutMs` to raise the outer ceiling, and
+pass the INNER spawn deadline as `outer − OUTER_TIMEOUT_BUFFER_MS` so the graceful
+inner timeout (`timed_out: true` + partial output + tree-kill) always fires before
+the outer wrapper's `ETIMEDOUT`. Omitting `ctx.timeoutMs` (the pre-v0.10.1 bug) left
+the outer clamped to `defaultTimeoutMs` regardless of `timeout_ms` — "exceeded
+10000ms". `execute_command` uses the shell pair (`shellTimeoutMs` 30 s /
+`shellMaxTimeoutMs` 600 s hard max) so 6–8 min builds run; the registry session
+timeout (300 s / 3600 s) is independent and untouched (invariant #41). The separate
+~4-min Claude Desktop MCP-transport ceiling is upstream and out of winfs's scope.
+
+**ssh binary resolution (v0.10.1).** `config.sshExePath` is optional; `resolveSshBin`
+honors an explicit value strictly, else auto-detects Git-bundled ssh (preferred over
+the often-broken System32 OpenSSH), then System32, then PATH.
+
+**Wave summary.** Spec invariant set grew #42 → #44 (+2). New modules:
+`transport_log.ts` (v0.10.0, opt-in `WINFS_TRANSPORT_LOG`), `config_watch.ts`
+(v0.10.0, allowedRoots hot-reload), `ssh_resolver.ts` (v0.10.1). Versions
+0.9.2 → 0.10.0 → 0.10.1.
