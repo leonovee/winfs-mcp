@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "winfs-mcp",
   "display_name": "winfs — Windows filesystem & exec MCP",
-  "version": "0.10.3",
+  "version": "1.0.0",
   "description": "Secure Windows filesystem, git, exec and process-control MCP server with allowed-roots enforcement, atomic writes, hard timeouts and an audit log.",
   "long_description": "winfs is a local MCP server for Windows 10/11. It exposes read/write/search/edit filesystem tools, read-only git, sandboxed command/python/pytest execution, persistent process sessions, SSRF-guarded fetch_url and more — all bounded by an allowed-roots whitelist, atomic temp+fsync+rename writes, hard-bounded timeouts, a shell blocklist and a redacting audit log. Configure the directories winfs may touch in the fields below; everything outside them is refused with EPERM_ROOT unless you explicitly opt into unrestricted mode.",
   "author": {
