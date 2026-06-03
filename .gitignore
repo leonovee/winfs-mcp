@@ -5,6 +5,16 @@ coverage/
 *.log
 .DS_Store
 
+# Scratch / debug artifacts in the repo root (recreatable; never commit).
+# Root-anchored (/) so they don't shadow tracked files in subdirectories
+# such as audit/external_reviews/.../_gemini_prompt.txt. *.log above already
+# covers transport.log / _build.log / _tsc.log; the entries below add the
+# .txt scratch files (_ff.txt, _gitcheck.txt, _gitstatus.txt) and editor .bak.
+/transport.log
+/.transport.log
+/_*.txt
+*.bak
+
 # Local Claude Code state (per-machine)
 .claude/settings.local.json
 
