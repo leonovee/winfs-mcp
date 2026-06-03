@@ -137,6 +137,37 @@ describe("tools/fs/copy", () => {
     }
   });
 
+  it("unrestricted mode: recursively copies a tree whose realpath is OUTSIDE the narrow allowedRoots, skipping nothing", async () => {
+    // Regression for the GPT-review finding: copyEntry used a local
+    // isInsideAllowed() that checked only config.resolvedAllowedRoots and
+    // ignored config.serverMode. In unrestricted mode the top-level
+    // checkAllowed passed but every entry was then skipped as
+    // "outside allowedRoots" — violating the declared unrestricted contract.
+    const unrestricted: ResolvedConfig = { ...config, serverMode: "unrestricted" };
+    // Build the SOURCE tree OUTSIDE the (narrow) allowed root, as a sibling of
+    // the temp root — exactly the case unrestricted mode is meant to allow.
+    const sibling = await fs.mkdtemp(path.join(path.dirname(root), "winfs-copy-src-"));
+    try {
+      const srcDir = path.join(sibling, "tree");
+      await fs.mkdir(path.join(srcDir, "sub"), { recursive: true });
+      await fs.writeFile(path.join(srcDir, "a.txt"), "aaa", "utf8");
+      await fs.writeFile(path.join(srcDir, "sub", "b.txt"), "bbbb", "utf8");
+      const dstDir = path.join(sibling, "copy");
+      const res = await copyImpl(
+        { src: srcDir, dst: dstDir, overwrite: false, recursive: true },
+        unrestricted,
+      );
+      expect(res.ok).toBe(true);
+      if (!res.ok) throw new Error("expected ok");
+      expect(res.value.files_copied).toBe(2);
+      expect(res.value.files_skipped).toBe(0);
+      expect(await fs.readFile(path.join(dstDir, "a.txt"), "utf8")).toBe("aaa");
+      expect(await fs.readFile(path.join(dstDir, "sub", "b.txt"), "utf8")).toBe("bbbb");
+    } finally {
+      await fs.rm(sibling, { recursive: true, force: true });
+    }
+  });
+
   it("skips symlink-escape entries inside a recursive tree (spec amendment §B)", async () => {
     // Place a symlink that points OUTSIDE the allowed root. We expect copy
     // to skip it silently and count it in files_skipped. Skip the test if

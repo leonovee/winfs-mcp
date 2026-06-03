@@ -69,23 +69,20 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-function isInsideAllowed(realPath: string, config: ResolvedConfig): boolean {
-  const norm = path.normalize(realPath);
-  const cmp = process.platform === "win32" ? norm.toLowerCase() : norm;
-  for (const root of config.resolvedAllowedRoots) {
-    const r = process.platform === "win32" ? root.toLowerCase() : root;
-    if (cmp === r) return true;
-    const withSep = r.endsWith(path.sep) ? r : r + path.sep;
-    if (cmp.startsWith(withSep)) return true;
-  }
-  return false;
-}
-
 /**
  * Recursive copy that respects spec amendment 2026-05-16 §B: each entry is
  * realpath-checked; if it resolves outside allowedRoots (junction/symlink
  * escape) or is dangling, it's skipped and counted. Up to 10 skipped paths
  * are surfaced in the result for trace-ability.
+ *
+ * The per-entry allowed-roots check goes through the shared `checkAllowed`
+ * helper so it honors `config.serverMode`. The previous local check looked
+ * only at `config.resolvedAllowedRoots` and ignored unrestricted mode, so a
+ * recursive copy in unrestricted mode skipped every child as "outside roots"
+ * even though unrestricted explicitly permits paths outside the sandbox.
+ * `checkAllowed` returns ENOENT for a dangling symlink and EPERM_ROOT for a
+ * sandbox escape in strict mode — both map to "skip + count"; any other error
+ * propagates.
  */
 async function copyEntry(
   srcAbs: string,
@@ -94,26 +91,20 @@ async function copyEntry(
   config: ResolvedConfig,
   counters: Counters,
 ): Promise<StructuredError | undefined> {
-  let real: string;
-  try {
-    real = await fs.realpath(srcAbs);
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e?.code === "ENOENT") {
-      // Dangling symlink: skip.
+  const check = await checkAllowed(srcAbs, config);
+  if ("ok" in check && check.ok === false) {
+    const code = check.error.code;
+    if (code === "ENOENT" || code === "EPERM_ROOT") {
+      // Dangling symlink (ENOENT) or sandbox escape in strict mode
+      // (EPERM_ROOT): skip and count.
       counters.skipped++;
       if (counters.skippedPaths.length < 10) counters.skippedPaths.push(srcAbs);
       return undefined;
     }
-    return fromNodeError(err, `realpath ${srcAbs}`);
+    // Real IO error (e.g. EIO from a failed realpath): propagate.
+    return check;
   }
-
-  if (!isInsideAllowed(real, config)) {
-    // Junction / symlink that escapes the sandbox: skip.
-    counters.skipped++;
-    if (counters.skippedPaths.length < 10) counters.skippedPaths.push(srcAbs);
-    return undefined;
-  }
+  const real = (check as { realPath: string }).realPath;
 
   let stat: import("node:fs").Stats;
   try {
