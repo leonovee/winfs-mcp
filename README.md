@@ -560,8 +560,8 @@ the bundle installs and enforces `allowedRoots` end-to-end — **9/9 green**.
 - v0.6: [`docs/v0.6-acceptance.md`](docs/v0.6-acceptance.md)
 - v0.7: [`docs/v0.7-acceptance.md`](docs/v0.7-acceptance.md) (waves 1 / 2a / 2b / 2c + pre-tag bug-fix)
 - v0.8: [`docs/v0.8-acceptance.md`](docs/v0.8-acceptance.md) (filesystem parity + ToolContext)
-- v0.9 / v0.10 acceptance backfills are pending; the authoritative record for
-  those waves is the CHANGELOG `[0.9.x]` / `[0.10.x]` entries.
+- v0.9: [`docs/v0.9-acceptance.md`](docs/v0.9-acceptance.md) (MCP Roots + flaky-test stabilisation + security audit 7 → 0)
+- v0.10: [`docs/v0.10-acceptance.md`](docs/v0.10-acceptance.md) (child-spawn hardening + timeout-ceiling polish; v0.10.2 MCPB packaging follows)
 
 ## Roadmap
 
