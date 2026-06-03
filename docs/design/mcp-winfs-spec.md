@@ -464,7 +464,7 @@ mcp-winfs/
 
 ## 7. Phased Delivery
 
-**Статус: весь функционал поставлен (v0.10.2); v1.0.0-release ещё впереди —
+**Статус: весь функционал поставлен (v0.10.3); v1.0.0-release ещё впереди —
 гейт — полный eval suite.** Таблица ниже отражает
 **фактическую** поставку (не исходный план — он мапил exec/system/network на
 v0.6–v0.7, а по факту они вышли одной волной в v0.5.1). Детальные acceptance —
@@ -488,6 +488,7 @@ v0.6–v0.7, а по факту они вышли одной волной в v0.
 | **v0.9.1 / v0.9.2** | ✅ | Стабилизация 10 flaky process-тестов, `powershellExePath`, `fetch_url` коды (`EMAXREDIRECTS`/`EENCODING_UNSUPPORTED`), `npm audit` 7 → 0 |
 | **v0.10.0 / v0.10.1** | ✅ | Child-spawn hardening (explicit PATHEXT — инвариант #43, `GIT_TERMINAL_PROMPT=0`, shell-timeout pair), `allowedRoots` hot-reload, opt-in `WINFS_TRANSPORT_LOG`, timeout-ceiling fix (инвариант #44), ssh auto-detect, `execExtraPathDirs`, deferred-P2 closeout |
 | **v0.10.2** | ✅ | MCPB packaging (`winfs-0.10.2.mcpb` + Configure UI, маппинг user_config → runtime config без обхода enforcement, §AD / инвариант #45), production README rewrite. Новых инструментов нет. |
+| **v0.10.3** | ✅ | GPT-review fix wave (§AE): enforced `allowedSshHosts` (инвариант #35 исправлен — `ssh -G` это валидация резолва, не whitelist), `copy` honors unrestricted mode, audit redaction → sha256+длина по умолчанию + opt-in `auditVerbose` (инвариант #46), GitHub Actions CI, backfill v0.9/v0.10 acceptance. Новых инструментов нет. |
 | **v1.0.0** | ⏳ | **Release — планируется.** Гейт: полный eval suite (10 вопросов, ≥ 80 % pass через MCP) + production sign-off. Сейчас в `evals/` — примеры вопросов + драйвер `connections.py`; полный набор и `run.py` ещё впереди. |
 
 ---
@@ -1744,3 +1745,51 @@ magic-confirm — `unrestrictedFilesystem: true` без точной строк�
 **Wave summary.** Spec invariant set grew #44 → #45 (+1). Новых модулей в `src/`
 нет (упаковка вне рантайма: `mcpb/`, `scripts/build-mcpb.mjs`,
 `scripts/smoke/mcpb-smoke.mjs`). Версия 0.10.1 → 0.10.2.
+
+### 2026-06-03 — v0.10.3: GPT-review fix wave (§AE)
+
+Внешний review (GPT) выявил три реальных дефекта (1 security/contract, 1 bug,
+1 security), отсутствие CI и пробелы в acceptance-цепочке. **Новых инструментов
+нет** (surface 39). Все изменения backward-compatible: новые config-поля
+`allowedSshHosts` (optional) и `auditVerbose` (default false) сохраняют прежнее
+поведение по умолчанию — или делают его **строго безопаснее**.
+
+**§AE.1 — ssh_exec host allowlist (исправление инварианта #35).** «Whitelist
+через `ssh -G`» им никогда не был: `ssh -G <host>` печатает `hostname <literal>`
+даже для алиаса без `Host`-записи, т.е. принимал произвольные хосты (ложное
+чувство безопасности). Новый `config.allowedSshHosts: string[]` — реальный,
+enforced allowlist: при заданном поле `host` обязан быть точным членом, иначе
+`EHOST_UNKNOWN` **до** любого spawn; пустой массив блокирует всё. При незаданном
+поле остаётся прежняя проверка `ssh -G`, но переименована честно (везде —
+описание инструмента, §X, README) в *resolvability validation*, НЕ whitelist.
+
+**§AE.2 — copy honors serverMode.** `copyEntry` использовал локальную
+`isInsideAllowed`, смотревшую только в `resolvedAllowedRoots` и игнорировавшую
+`serverMode`. В unrestricted режиме верхний `checkAllowed` проходил, но каждый
+ребёнок пропускался как «вне allowedRoots». Теперь `copyEntry` использует общий
+`checkAllowed` (honors serverMode): ENOENT (битый симлинк) и EPERM_ROOT (escape
+в strict) → skip; прочее → propagate. Strict-поведение не изменилось.
+
+**Инвариант #46 — audit content redaction by digest.** Контентные блобы
+(`run_python` script, `execute_command` composed command, `ssh_exec` command,
+`write_chunk` content, а также subprocess stdout/stderr) пишутся в audit как
+`<label>_sha256` + `<label>_bytes`, **без** content-префикса по умолчанию —
+префикс мог утечь токен/ключ на первой строке («prefix» ≠ «safe»).
+`config.auditVerbose=true` дополнительно пишет префиксы для отладки. Редакция
+`write`/`append` `content` через `sanitizeArgs` (`<redacted: N bytes>`) не
+изменилась; `run_pytest` и так не клал raw-вывод в audit. Helper:
+`auditContentFields(label, text, verbose, cap)` в `audit.ts`.
+
+**CI.** `.github/workflows/ci.yml` — windows-latest (winfs Windows-only), матрица
+Node 18/20/22: `npm ci` → build → test → `npm audit --omit=dev` (gate) + полный
+`npm audit` (report-only, continue-on-error).
+
+**Acceptance backfills.** `docs/v0.9-acceptance.md`, `docs/v0.10-acceptance.md`;
+README acceptance-цепочка v0.1 → v0.10 полная.
+
+**Остаток (flagged, не исправлено).** `start_process` / `list_process` всё ещё
+отдают `command_prefix` (256) — но там это объявленное OUTPUT-поле (caller-facing,
+caller-supplied command), завязанное на контракт вывода: отдельное решение, не
+часть этой волны.
+
+**Wave summary.** Spec invariant set grew #45 → #46 (+1). Версия 0.10.2 → 0.10.3.

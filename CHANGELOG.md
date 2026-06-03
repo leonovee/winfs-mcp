@@ -5,6 +5,67 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-06-03 — GPT-review fix wave (ssh allowlist, copy, audit, CI)
+
+An external (GPT) review surfaced three real defects, a missing CI pipeline, and
+gaps in the acceptance-doc chain. **No new tools** (surface stays 39). All
+changes are backward-compatible: the new config fields default to the prior
+behavior or to a strictly safer one.
+
+### Security
+
+- **`ssh_exec` false whitelist (#1).** The "host whitelist" only checked that
+  `ssh -G <host>` returned a non-empty hostname — but ssh echoes
+  `hostname <literal>` even for an alias with no `Host` entry, so it accepted
+  arbitrary hosts. New optional **`config.allowedSshHosts`** is the real,
+  enforced allowlist: when set, `host` MUST be an exact member, else
+  `EHOST_UNKNOWN` before any spawn (empty array blocks all). When unset, the
+  `ssh -G` check is unchanged but relabelled honestly everywhere — it validates
+  *resolvability*, not membership, and is not a security boundary. Spec
+  invariant #35 corrected.
+- **Audit content-prefix leak (#3).** `run_python` (script), `execute_command`
+  (composed command), `ssh_exec` (command) and `write_chunk` (content) stored a
+  content **prefix** in the audit log; a token/key on the first line leaked.
+  They now store **SHA-256 + byte length** by default (`<label>_sha256` /
+  `<label>_bytes`), no prefix. New **`config.auditVerbose`** (default false) adds
+  the debugging prefixes back when set. `write`/`append` `content` redaction is
+  unchanged. New helper `auditContentFields`; invariant #46.
+
+### Fixed
+
+- **`copy` ignored unrestricted mode (#2).** `copyEntry` used a local
+  allowed-roots check that ignored `serverMode`, so in unrestricted mode the
+  top-level copy passed but every child was skipped as "outside allowedRoots".
+  It now uses the shared `checkAllowed` (honors `serverMode`); strict-mode
+  escape/dangling behavior is unchanged.
+
+### Added
+
+- **CI (#4).** `.github/workflows/ci.yml` — GitHub Actions, windows-latest,
+  Node 18/20/22: `npm ci` → build → test → `npm audit --omit=dev` (gate) + full
+  audit (report-only). README CI badge.
+- **`config.allowedSshHosts`** (optional) and **`config.auditVerbose`**
+  (default false).
+- **Acceptance backfills (#5)** — `docs/v0.9-acceptance.md`,
+  `docs/v0.10-acceptance.md`; README acceptance chain now complete v0.1 → v0.10.
+
+### Tooling
+
+- **mcpb-smoke tar pin (#6)** — `scripts/smoke/mcpb-smoke.mjs` pins
+  `%SystemRoot%\System32\tar.exe` (bsdtar) instead of a bare `tar`, so the
+  bundle unpack no longer fails when a Bash/MSYS shell puts GNU tar (which can't
+  read a zip) first on PATH. Harness robustness only.
+
+### Known / deferred
+
+- `start_process` / `list_process` still expose a 256-char `command_prefix`, but
+  there it is a declared **output** field (caller-facing, caller-supplied), so
+  the audit reuse is entangled with the output contract — flagged for a separate
+  decision, not changed here.
+
+Verification: **542 tests** in 98 files, **79/79** wire-level smoke,
+**9/9** MCPB bundle smoke; `npm audit --omit=dev` and full `npm audit` both 0.
+
 ## [0.10.2] — 2026-06-03 — MCPB packaging + production README/spec rewrite
 
 A packaging-and-docs wave. **No new tools** — the surface stays frozen at 39

@@ -107,7 +107,7 @@ export interface ResolvedConfig extends RawConfig {
   serverMode: ServerMode;
 }
 
-const VERSION = "0.10.2";
+const VERSION = "0.10.3";
 
 /** v0.6 §U: exact magic string required as `unrestrictedFilesystemConfirm`
  *  when `unrestrictedFilesystem` is true. Hardcoded; never configurable. */

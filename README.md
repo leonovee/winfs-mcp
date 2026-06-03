@@ -7,7 +7,7 @@ Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
 UTF-8-no-BOM invariant.
 
-**Status:** **v0.10.2** — **39 tools** (5 core from v0.1 + 5 mutations / batch /
+**Status:** **v0.10.3** — **39 tools** (5 core from v0.1 + 5 mutations / batch /
 introspection from v0.2 + 4 search / self-recovery from v0.3 + 4 editor /
 slicing / diff / tail from v0.4 + 11 git / exec / system / network from v0.5 +
 1 byte-offset chunked write from v0.6 + 3 consumer-agent adds from v0.7 wave 1
@@ -16,7 +16,7 @@ v0.7 wave 2b (`start_process`, `interact`, `list_process`, `kill_process`) + 2
 filesystem-parity tools from v0.8 (`directory_tree`, `read_media_file`)) on top
 of the full core/ invariant layer. Also ships MCP-Roots support (v0.9), an
 opt-in `unrestrictedFilesystem` mode, and live hot-reload of `allowedRoots`
-(v0.10). **533 tests in 98 files, 79/79 wire-level smoke probes.**
+(v0.10). **542 tests in 98 files, 79/79 wire-level smoke probes.**
 
 ## Install
 
@@ -25,7 +25,7 @@ required); a manual clone/build is the alternative for development.
 
 ### Option A — MCPB bundle (recommended)
 
-1. Download `winfs-0.10.2.mcpb` (build it with `npm run mcpb`, or grab it from
+1. Download `winfs-0.10.3.mcpb` (build it with `npm run mcpb`, or grab it from
    the GitHub release).
 2. **Drag the `.mcpb` file onto Claude Desktop** (Settings → Extensions). Claude
    Desktop unpacks it with a bundled Node runtime — nothing else to install.
@@ -52,7 +52,7 @@ npm run build
 
 Requires Node ≥ 18. Then write a `config.json` and wire it into Claude Desktop
 as shown under **Setup in Claude Desktop** below. Build the MCPB bundle yourself
-with `npm run mcpb` (output: `dist-mcpb/winfs-0.10.2.mcpb`).
+with `npm run mcpb` (output: `dist-mcpb/winfs-0.10.3.mcpb`).
 
 ## Configuration
 
@@ -175,7 +175,7 @@ Use absolute paths for both `dist/index.js` and the config. **Do not use
 Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 `list`, `stat`) should appear in the tools list.
 
-## Tools (v0.10.2 — 39 tools)
+## Tools (v0.10.3 — 39 tools)
 
 ### Core FS (v0.1)
 
@@ -357,7 +357,7 @@ The items that earlier README revisions flagged as open are now closed:
   `fs.rm` hit EBUSY; the timeout handler didn't force-settle when `taskkill /F /T`
   failed to fire `close`). `ProcessSession.settle` now destroys stdio pipes, the
   timeout handler adds a defensive grace + force-settle, and tempdir removal uses
-  a retry ladder. The full suite (533 tests) is green.
+  a retry ladder. The full suite (542 tests) is green.
 - **v0.7 pre-tag external review (~15 P2 findings) — closed across v0.9.1 /
   v0.9.2 / v0.10.x.** `fetch_url` gained `EMAXREDIRECTS` and
   `EENCODING_UNSUPPORTED` (no more silent gzip corruption), late-chunk and 3xx
@@ -527,14 +527,14 @@ written to stderr and auto-detect runs as a fallback.
 ## Tests
 
 ```powershell
-npm test          # vitest run — 533 tests in 98 files
+npm test          # vitest run — 542 tests in 98 files
 npm run test:watch
 npm run smoke      # node scripts/smoke/v0.7-smoke.mjs — 79/79 wire-level probes
-npm run mcpb       # build dist-mcpb/winfs-0.10.2.mcpb, then:
+npm run mcpb       # build dist-mcpb/winfs-0.10.3.mcpb, then:
 node scripts/smoke/mcpb-smoke.mjs   # 9/9 bundle-install probes
 ```
 
-winfs ships **533 tests in 98 files**: per-tool happy path + every error code
+winfs ships **542 tests in 98 files**: per-tool happy path + every error code
 across all 39 tools, plus invariants (UTF-8 roundtrip, junction/`..` escape,
 timeout abort + grep partial-result + edit_file ETIMEDOUT, atomic-write
 integrity + edit_file dry-run-no-temp / rename-failure-no-leak + write_chunk
@@ -581,4 +581,5 @@ from v0.7 wave 2b, and 2 from v0.8).
 - ✅ **v0.9.x — MCP Roots + security** — MCP-Roots union mode (spec §AC, invariant #42), flaky-test stabilisation, `powershellExePath`, `fetch_url` error-code hardening, `npm audit` 7 → 0.
 - ✅ **v0.10.x — child-spawn hardening + polish** — explicit PATHEXT on every spawn, `GIT_TERMINAL_PROMPT=0`, shell-timeout pair, `allowedRoots` hot-reload, opt-in `WINFS_TRANSPORT_LOG`, timeout-ceiling fix, ssh auto-detect, `execExtraPathDirs`, deferred-P2 closeout.
 - ✅ **v0.10.2 — MCPB packaging** — drag-install bundle for Claude Desktop (`winfs-0.10.2.mcpb` + Configure UI). `mcpb/manifest.json` + `mcpb/launch.mjs` map the install-time `user_config` onto the same runtime config with enforcement fully intact (spec §AD, invariant #45); `npm run mcpb` builds and `scripts/smoke/mcpb-smoke.mjs` proves the packed bundle installs and refuses out-of-root reads. No new tools.
+- ✅ **v0.10.3 — GPT-review fix wave** — enforced `allowedSshHosts` ssh allowlist (the `ssh -G` check is honestly relabelled *resolvability validation*, not a whitelist — invariant #35 corrected), `copy` honors unrestricted mode, audit logs store SHA-256 + byte length of script / command / output by default with opt-in `auditVerbose` prefixes (invariant #46), GitHub Actions CI (windows, Node 18/20/22), and v0.9 / v0.10 acceptance backfills. No new tools.
 - ⏳ **v1.0 — release (planned)** — gated on the full 10-question eval suite (≥ 80 % pass through MCP) plus production sign-off. The eval harness (`evals/`) currently ships example questions and the `connections.py` driver; the complete question set and the `run.py` runner are still to come.
