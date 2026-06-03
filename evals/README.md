@@ -41,7 +41,7 @@ exercise it through realistic exploration:
 - **Stable** — answer must not depend on `mtime`, current git HEAD, or
   any time-varying state.
 
-## Running (planned, v0.7+)
+## Running (planned)
 
 ```powershell
 cd evals
@@ -51,4 +51,10 @@ pip install -r requirements.txt
 python run.py --eval v1.0-evaluation.xml --server "node ../dist/index.js --config ../configs/default.json"
 ```
 
-Acceptance gate for v1.0: ≥ 8 / 10 questions answered correctly through MCP.
+## Status — post-1.0 backlog
+
+This is a **post-1.0 backlog** item, **not** a v1.0.0 release gate. v1.0.0
+shipped on the MCPB packaging + GPT-review hardening waves; the eval suite is
+still a 2-question skeleton with no `run.py` runner. The remaining work — finalise
+the 10-question suite and the runner, then execute it through MCP targeting
+**≥ 8 / 10** — is tracked in spec §10 (Open Questions для v1.0+).

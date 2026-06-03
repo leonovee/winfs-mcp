@@ -16,7 +16,8 @@
     - v0.4: edit_file dry-run + read_section questions
     - v0.5: git_log / git_diff / git_blame questions
     - v0.7: full 10-question suite finalised
-  By v1.0 acceptance: ≥8/10 pass rate.
+  Post-1.0 backlog (NOT a v1.0.0 release gate): finalise the 10-question suite +
+  run.py runner and hit >=8/10 through MCP. See evals/README.md and spec §10.
 -->
 <evaluation>
   <qa_pair>

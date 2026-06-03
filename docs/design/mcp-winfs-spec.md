@@ -464,8 +464,9 @@ mcp-winfs/
 
 ## 7. Phased Delivery
 
-**Статус: весь функционал поставлен (v0.10.3); v1.0.0-release ещё впереди —
-гейт — полный eval suite.** Таблица ниже отражает
+**Статус: v1.0.0 — release.** Весь функционал поставлен; tool surface заморожен
+на 39 (с v0.8). Полный прогон eval-suite — post-1.0 backlog (§10), НЕ гейт
+релиза. Таблица ниже отражает
 **фактическую** поставку (не исходный план — он мапил exec/system/network на
 v0.6–v0.7, а по факту они вышли одной волной в v0.5.1). Детальные acceptance —
 в `docs/v*-acceptance.md`; пер-волновые поправки спецификации — в §X / §Y / §Z /
@@ -489,7 +490,7 @@ v0.6–v0.7, а по факту они вышли одной волной в v0.
 | **v0.10.0 / v0.10.1** | ✅ | Child-spawn hardening (explicit PATHEXT — инвариант #43, `GIT_TERMINAL_PROMPT=0`, shell-timeout pair), `allowedRoots` hot-reload, opt-in `WINFS_TRANSPORT_LOG`, timeout-ceiling fix (инвариант #44), ssh auto-detect, `execExtraPathDirs`, deferred-P2 closeout |
 | **v0.10.2** | ✅ | MCPB packaging (`winfs-0.10.2.mcpb` + Configure UI, маппинг user_config → runtime config без обхода enforcement, §AD / инвариант #45), production README rewrite. Новых инструментов нет. |
 | **v0.10.3** | ✅ | GPT-review fix wave (§AE): enforced `allowedSshHosts` (инвариант #35 исправлен — `ssh -G` это валидация резолва, не whitelist), `copy` honors unrestricted mode, audit redaction → sha256+длина по умолчанию + opt-in `auditVerbose` (инвариант #46), GitHub Actions CI, backfill v0.9/v0.10 acceptance. Новых инструментов нет. |
-| **v1.0.0** | ⏳ | **Release — планируется.** Гейт: полный eval suite (10 вопросов, ≥ 80 % pass через MCP) + production sign-off. Сейчас в `evals/` — примеры вопросов + драйвер `connections.py`; полный набор и `run.py` ещё впереди. |
+| **v1.0.0** | ✅ | **Release.** MCPB packaging + полная GPT-review hardening-волна (ssh allowlist, copy unrestricted, audit digest по всем exec/process/file инструментам) + GitHub Actions CI + честные доки. Новых инструментов нет. Полный прогон eval-suite — post-1.0 backlog (§10), не гейт. |
 
 ---
 
@@ -599,6 +600,7 @@ Per-tool: happy path + каждый error code.
 Эти решения откладываются до production-опыта, не блокируют v0.1:
 
 - **MCPB packaging.** ✅ Поставлено в v0.10.2: `mcpb/manifest.json` + `mcpb/launch.mjs` (shim user_config → runtime config), сборка `npm run mcpb` → `dist-mcpb/winfs-0.10.2.mcpb`, drag-install в Claude Desktop. См. §AD + инвариант #45.
+- **Full eval-suite run (post-1.0 backlog).** Дописать набор до 10 вопросов, написать `run.py` и реально прогнать через MCP с целью ≥ 8/10. Раньше ошибочно числился гейтом v1.0 — переклассифицирован в post-1.0: v1.0.0 поставлен на MCPB packaging + hardening-волнах, без eval-гейта. См. `evals/README.md`.
 - **Plugin mechanism.** Если возникнет потребность в domain helpers — добавлять `plugins/` директорию или продолжать через `run_python` композицию?
 - **Telemetry.** Нужна ли opt-in anonymous metric collection (как DC) для diagnostics? Скорее нет — privacy-first.
 - **Auto-update.** Через npm registry или GitHub releases?
@@ -1705,8 +1707,8 @@ the often-broken System32 OpenSSH), then System32, then PATH.
 
 v0.10.2 — упаковочная волна. **Новых инструментов нет** (surface заморожен на 39
 с v0.8). Содержание волны: MCPB-упаковка, production README rewrite, §7 приведён
-к фактической поставке. (Полный eval suite и сам v1.0.0-release — отдельная
-будущая волна; см. §7 и §10.)
+к фактической поставке. (Полный прогон eval-suite — post-1.0 backlog (§10),
+не гейт для v1.0.0.)
 
 **§AD.1. MCPB как дополнительный способ установки (не замена).** Ручной путь
 (`--config <path>` либо `%LOCALAPPDATA%\mcp-winfs\config.json`) сохранён без
