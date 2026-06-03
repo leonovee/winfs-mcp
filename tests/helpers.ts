@@ -73,6 +73,7 @@ export async function makeTempConfig(): Promise<{ config: ResolvedConfig; root: 
     processSessionTtlMs: 60_000,
     processGcIntervalMs: 10_000,
     auditLogMaxBytes: 1024 * 1024,
+    auditVerbose: false,
     configPath: "<test>",
     resolvedAllowedRoots: [path.normalize(real)],
     resolvedAuditLogPath: auditPath,

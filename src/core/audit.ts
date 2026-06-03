@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import type { ResolvedConfig } from "./config.js";
 
 export interface AuditRecord {
@@ -102,6 +103,30 @@ export function sanitizeArgs(args: unknown): Record<string, unknown> {
     out[k] = v;
   }
   return out;
+}
+
+/**
+ * GPT-review #3 — non-reversible audit summary of a content blob (a script
+ * body, a composed command, subprocess stdout/stderr). Returns
+ * `{ <label>_sha256, <label>_bytes }` always, plus `<label>_prefix` ONLY when
+ * `verbose` is true. The default (verbose=false) stores no content prefix: a
+ * prefix can still leak a token/key printed on the first line, so "prefix" was
+ * never "safe". Callers pass `config.auditVerbose` as `verbose`. The sha256 +
+ * byte length still let an operator correlate two runs or confirm size without
+ * exposing the bytes.
+ */
+export function auditContentFields(
+  label: string,
+  text: string,
+  verbose: boolean,
+  prefixCap: number,
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    [`${label}_sha256`]: createHash("sha256").update(text, "utf8").digest("hex"),
+    [`${label}_bytes`]: Buffer.byteLength(text, "utf8"),
+  };
+  if (verbose) fields[`${label}_prefix`] = text.slice(0, prefixCap);
+  return fields;
 }
 
 let writeQueue: Promise<void> = Promise.resolve();

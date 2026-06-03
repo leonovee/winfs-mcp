@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
+import { auditContentFields } from "../../core/audit.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import { checkAllowed } from "../../core/allowed_roots.js";
 import { spawnSubprocess, resolvePython } from "../../core/exec_safety.js";
@@ -53,20 +54,11 @@ interface RunPythonResult extends Record<string, unknown> {
   timed_out: boolean;
 }
 
-interface PythonAuditExtras {
-  mode: "inline" | "file";
-  script_bytes?: number;
-  script_prefix?: string;
-  path?: string;
-  stdout_prefix: string;
-  stderr_prefix: string;
-}
-
-const auditByResult = new WeakMap<object, PythonAuditExtras>();
+const auditByResult = new WeakMap<object, Record<string, unknown>>();
 const AUDIT_PREFIX_CAP = 4 * 1024;
 const SCRIPT_PREFIX_CAP = 256;
 
-export function getRunPythonAuditExtras(value: RunPythonResult): PythonAuditExtras | undefined {
+export function getRunPythonAuditExtras(value: RunPythonResult): Record<string, unknown> | undefined {
   return auditByResult.get(value);
 }
 
@@ -175,18 +167,19 @@ export async function runPythonImpl(
     truncated_stderr: spawnRes.truncatedStderr,
     timed_out: spawnRes.timedOut,
   };
-  auditByResult.set(value, {
+  // GPT-review #3: store sha256 + byte length by default; content prefixes only
+  // when config.auditVerbose. A prefix can leak a secret printed on line 1.
+  const verbose = config.auditVerbose;
+  const extras: Record<string, unknown> = {
     mode: args.mode,
-    ...(args.mode === "inline" && args.script !== undefined
-      ? {
-          script_bytes: Buffer.byteLength(args.script, "utf8"),
-          script_prefix: args.script.slice(0, SCRIPT_PREFIX_CAP),
-        }
-      : {}),
-    ...(scriptPath ? { path: scriptPath } : {}),
-    stdout_prefix: spawnRes.stdout.slice(0, AUDIT_PREFIX_CAP),
-    stderr_prefix: spawnRes.stderr.slice(0, AUDIT_PREFIX_CAP),
-  });
+    ...auditContentFields("stdout", spawnRes.stdout, verbose, AUDIT_PREFIX_CAP),
+    ...auditContentFields("stderr", spawnRes.stderr, verbose, AUDIT_PREFIX_CAP),
+  };
+  if (args.mode === "inline" && args.script !== undefined) {
+    Object.assign(extras, auditContentFields("script", args.script, verbose, SCRIPT_PREFIX_CAP));
+  }
+  if (scriptPath) extras.path = scriptPath;
+  auditByResult.set(value, extras);
   return ok(value);
 }
 
@@ -204,8 +197,10 @@ The python binary is resolved via \`config.pythonHome\` (if set) — never via s
 discovery; closes Python-shim attack vectors. Without pythonHome, falls back to "python"
 in the sanitized PATH (same defenses as execute_command).
 
-Audit log: inline script PREFIX (first 256 chars) + full script_bytes count; never full
-source. File path is recorded. stdout/stderr first 4 KB.
+Audit log: SHA-256 digest + byte length of the inline script and of stdout/stderr —
+never the content itself (a prefix can leak a secret on line 1). File path is
+recorded. Set config.auditVerbose=true to ALSO record 256-char / 4 KB prefixes
+for debugging.
 
 Args:
   - mode ("inline"|"file")

@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { checkAllowed } from "../../core/allowed_roots.js";
 import { runTool } from "../../core/tool_wrapper.js";
+import { auditContentFields } from "../../core/audit.js";
 import { buildError, ok, fromNodeError, type Result } from "../../core/errors.js";
 import { AbsolutePath } from "../../schemas/common.js";
 import type { ToolContext } from "../../core/tool_context.js";
@@ -48,17 +49,11 @@ interface WriteChunkResult extends Record<string, unknown> {
   atomic: false;
 }
 
-interface WriteChunkAuditExtras {
-  content_length: number;
-  content_prefix: string;
-  truncated_at: number;
-}
-
-const auditByResult = new WeakMap<object, WriteChunkAuditExtras>();
+const auditByResult = new WeakMap<object, Record<string, unknown>>();
 
 export function getWriteChunkAuditExtras(
   value: WriteChunkResult,
-): WriteChunkAuditExtras | undefined {
+): Record<string, unknown> | undefined {
   return auditByResult.get(value);
 }
 
@@ -230,11 +225,13 @@ export async function writeChunkImpl(
     total_bytes_after: postStat.size,
     atomic: false,
   };
-  auditByResult.set(value, {
-    content_length: buf.length,
-    content_prefix: args.content.slice(0, AUDIT_PREFIX_CAP),
-    truncated_at: AUDIT_PREFIX_CAP,
-  });
+  // GPT-review #3: sha256 + byte length by default; the content prefix only
+  // when config.auditVerbose (it is raw file content and can carry a secret).
+  // The written byte count is already in the response as `bytes_written`.
+  auditByResult.set(
+    value,
+    auditContentFields("content", args.content, config.auditVerbose, AUDIT_PREFIX_CAP),
+  );
   return ok(value);
 }
 
@@ -277,9 +274,10 @@ Errors:
   - ETOOLARGE (post-write size > readMaxBytes)
   - ETIMEDOUT
 
-Audit log records {path, offset, content_length, content_prefix (first 256 chars),
-truncated_at, mode}. Full content is NEVER persisted — same redaction policy as
-\`edit_file.edits[].new_str\`.`,
+Audit log records {path, offset, content_sha256, content_bytes, mode} — the
+content is stored as a SHA-256 digest + byte length, NEVER the bytes (a prefix
+can leak a secret). The written size is also in the response as bytes_written.
+Set config.auditVerbose=true to ALSO record a 256-char content_prefix.`,
       inputSchema: InputShape,
       outputSchema: OutputShape,
       annotations: {

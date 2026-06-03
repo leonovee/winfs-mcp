@@ -1085,7 +1085,7 @@ The write may naturally extend the file when `offset + content_length > file_siz
 
 **Invariant #33 — UTF-8 boundary check.** When `encoding === "utf8"` (default) and `validate_byte_range === true` (default), both the boundary at `offset` and the boundary at `offset + content_length` in the EXISTING file must NOT be UTF-8 continuation bytes (`0x80..0xBF`). Mid-multibyte boundaries → `EENCODING` with the offending byte in `details`. Prevents producing a file that is valid UTF-8 before and after the chunk but corrupted at the seam. Skipped when `validate_byte_range === false` or `encoding === "base64"`.
 
-**Audit redaction.** The `content` field is redacted in `args_summary` per the v0.4 sensitive-args sanitizer (`<redacted: N bytes>`). The `auditExtras` callback adds: `offset` (full), `content_length` (full), `content_prefix` (first 256 chars), `truncated_at: 256`, `mode` (per invariant #30). Full content is NEVER persisted to the audit log. Same redaction policy as `edit_file.edits[].new_str`.
+**Audit redaction.** The `content` field is redacted in `args_summary` per the v0.4 sensitive-args sanitizer (`<redacted: N bytes>`). The `auditExtras` callback adds: `offset` (full), `content_sha256`, `content_bytes`, `mode` (per invariant #30). Content is stored as a SHA-256 digest + byte length, NEVER a prefix (GPT-review #3 / invariant #46 — a prefix can leak a secret on line 1). The written byte count is also in the response as `bytes_written`. `config.auditVerbose=true` additionally records a 256-char `content_prefix` for debugging.
 
 **§W. `edit_file.edits[].expected_count` extension.**
 
@@ -1159,7 +1159,7 @@ New tool under `src/tools/system/ssh_exec.ts`. First-class SSH remote execution 
 
 **Mode behavior.** Allowed in both `strict` and `unrestricted` server modes. ssh_exec is deliberate network egress, independent of `allowedRoots`; gate it with `config.allowedSshHosts` (the enforced host allowlist — invariant #35) rather than relying on `~/.ssh/config` resolvability alone. The mutation-tool audit-record carries `mode` per invariant #30.
 
-**Audit redaction.** `command` is in `SENSITIVE_ARG_KEYS` — sanitizer replaces it with `<redacted: N bytes>`. `auditExtras` adds: `host` (full), `command_prefix` (first 256 chars), `command_length` (full), `truncated_at: 256`, plus on success `exit_code`, `timed_out`, `duration_ms`. Full command is NEVER persisted.
+**Audit redaction.** `command` is in `SENSITIVE_ARG_KEYS` — sanitizer replaces it with `<redacted: N bytes>`. `auditExtras` adds: `host` (full), `command_sha256`, `command_bytes`, plus on success `exit_code`, `timed_out`, `duration_ms`. The command is stored as a SHA-256 digest + byte length, NEVER a prefix (GPT-review #3 / invariant #46). `config.auditVerbose=true` additionally records a 256-char `command_prefix`.
 
 **Documented prerequisite (not enforced).** Working ssh-agent or passphrase-less key. Non-interactive subprocesses on Windows don't inherit Pageant / agent state from interactive sessions; if your key has a passphrase, ssh_exec will hang waiting for stdin (which is `ignore`d) until the deadline.
 

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { appendAudit, flushAudit, sanitizeArgs } from "../../src/core/audit.js";
+import { createHash } from "node:crypto";
+import { appendAudit, flushAudit, sanitizeArgs, auditContentFields } from "../../src/core/audit.js";
 import { makeTempConfig, cleanupTempConfig } from "../helpers.js";
 import type { ResolvedConfig } from "../../src/core/config.js";
 
@@ -33,6 +34,24 @@ describe("invariant: audit log (spec §2.11)", () => {
     expect(typeof sanitized.glob).toBe("string");
     expect((sanitized.glob as string).startsWith("x".repeat(256))).toBe(true);
     expect(sanitized.glob).toMatch(/truncated/);
+  });
+
+  it("auditContentFields: digest-only by default, never the content prefix", () => {
+    const secret = "line1-SECRET-API-KEY\nline2\nline3";
+    const fields = auditContentFields("stdout", secret, false, 4096);
+    const expectedSha = createHash("sha256").update(secret, "utf8").digest("hex");
+    expect(fields.stdout_sha256).toBe(expectedSha);
+    expect(fields.stdout_bytes).toBe(Buffer.byteLength(secret, "utf8"));
+    expect(fields.stdout_prefix).toBeUndefined();
+    expect(JSON.stringify(fields)).not.toContain("SECRET-API-KEY");
+  });
+
+  it("auditContentFields: includes the prefix only when verbose=true", () => {
+    const text = "abcdefgh";
+    const fields = auditContentFields("script", text, true, 4);
+    expect(fields.script_prefix).toBe("abcd");
+    expect(fields.script_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(fields.script_bytes).toBe(8);
   });
 
   it("writes JSONL records to the configured audit path", async () => {

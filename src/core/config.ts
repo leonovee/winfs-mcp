@@ -76,6 +76,15 @@ const CONFIG_SCHEMA = z
     processGcIntervalMs: z.number().int().positive().default(10_000),
     auditLogPath: z.string().optional(),
     auditLogMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),
+    // GPT-review #3: audit-log verbosity for content blobs (run_python script,
+    // execute_command composed command, ssh_exec command, subprocess
+    // stdout/stderr). DEFAULT false → the audit record stores only a SHA-256
+    // digest + byte length of each blob, never a content prefix (a prefix can
+    // still leak a token/key on the first line — "prefix" != "safe"). Set true
+    // to ALSO record a debugging prefix. Default false is strictly safer than
+    // the previous always-prefix behavior; write/append `content` redaction in
+    // sanitizeArgs is unaffected.
+    auditVerbose: z.boolean().default(false),
   })
   .strict();
 

@@ -170,20 +170,36 @@ describe("tools/file/write_chunk", () => {
     expect(res.value.bytes_written).toBe(1);
   });
 
-  it("audit extras populated with content_length + content_prefix + truncated_at", async () => {
+  it("audit extras: content stored as sha256 + byte length, NEVER a prefix by default", async () => {
     const p = path.join(root, "aud.txt");
     await fs.writeFile(p, "x".repeat(500), "utf8");
-    const longContent = "y".repeat(400);
+    const secret = "SECRET-API-KEY-" + "y".repeat(400);
     const res = await writeChunkImpl(
-      { path: p, offset: 0, content: longContent, encoding: "utf8", validate_byte_range: true },
+      { path: p, offset: 0, content: secret, encoding: "utf8", validate_byte_range: true },
       config,
     );
     expect(res.ok).toBe(true);
     if (!res.ok) throw new Error("expected ok");
     const extras = getWriteChunkAuditExtras(res.value);
     expect(extras).toBeDefined();
-    expect(extras!.content_length).toBe(400);
-    expect(extras!.content_prefix.length).toBe(256);
-    expect(extras!.truncated_at).toBe(256);
+    expect(JSON.stringify(extras)).not.toContain("SECRET-API-KEY");
+    expect(extras!.content_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(extras!.content_bytes).toBe(Buffer.byteLength(secret, "utf8"));
+    expect(extras!.content_prefix).toBeUndefined();
+  });
+
+  it("audit extras: content_prefix added when config.auditVerbose=true", async () => {
+    const p = path.join(root, "aud2.txt");
+    await fs.writeFile(p, "x".repeat(500), "utf8");
+    const verbose: ResolvedConfig = { ...config, auditVerbose: true };
+    const res = await writeChunkImpl(
+      { path: p, offset: 0, content: "z".repeat(400), encoding: "utf8", validate_byte_range: true },
+      verbose,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected ok");
+    const extras = getWriteChunkAuditExtras(res.value);
+    expect((extras!.content_prefix as string).length).toBe(256);
+    expect(extras!.content_sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 });

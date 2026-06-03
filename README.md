@@ -291,15 +291,26 @@ see spec amendment §F.
 
 ## Known limitations
 
-### Audit-log content truncation
+### Audit-log content redaction
 
-The audit log is a forensic trail, not a content store. To keep secrets out of
-the log, every mutation entry truncates user-supplied content before write:
-`write` / `append` payloads are recorded as a 256-character prefix
-(`content_prefix`) plus a full byte count (`content_length`); `execute_command`
-/ `run_python` / `run_pytest` stdout and stderr are recorded as 4-KB prefixes
-per stream. Reading the audit log via `audit_tail` therefore tells you **what
-ran and roughly what came back**, not what was written or printed in full. Do
+The audit log is a forensic trail, not a content store. User-supplied content is
+kept out of it by default:
+
+- **`write` / `append`** — the `content` argument is fully redacted to
+  `<redacted: N bytes>`; the bytes never reach the log.
+- **`execute_command` / `run_python` / `ssh_exec`** — the composed command /
+  inline script body and the subprocess stdout/stderr are recorded as a
+  **SHA-256 digest + byte length** (`*_sha256` / `*_bytes`), never the content.
+  A prefix would still leak a token or key printed on the first line, so by
+  default no prefix is stored. (`run_pytest` keeps its parsed counts only; its
+  raw output is not copied into the audit record.)
+
+Set **`config.auditVerbose: true`** to ALSO record short debugging prefixes
+(64-char composed command, 256-char script / ssh command, 4-KB stdout/stderr)
+next to the digests — opt-in, for when you need to see what actually ran.
+
+Reading the audit log via `audit_tail` therefore tells you **what ran and
+roughly how big the result was**, not what was written or printed in full. Do
 not use the audit log as a verification channel for "did file X end up with the
 exact bytes I sent" — re-`read` the file instead.
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
+import { auditContentFields } from "../../core/audit.js";
 import { spawnSubprocess } from "../../core/exec_safety.js";
 import { resolveSshBin } from "../../core/ssh_resolver.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
@@ -295,8 +296,9 @@ Errors:
   - ETIMEDOUT: exceeded timeout_seconds
   - EIO: ssh.exe failed to start (mirror v0.6 exec_safety spawn-error fix)
 
-Audit log records host, command prefix (first 256 chars), command length,
-exit_code, timed_out, duration_ms — full command is NEVER persisted.`,
+Audit log records host, the SHA-256 digest + byte length of the command,
+exit_code, timed_out, duration_ms — the command text is NEVER persisted (set
+config.auditVerbose=true to ALSO record a 256-char prefix for debugging).`,
       inputSchema: InputShape,
       outputSchema: OutputShape,
       annotations: {
@@ -318,11 +320,11 @@ exit_code, timed_out, duration_ms — full command is NEVER persisted.`,
           maxTimeoutMs: MAX_TIMEOUT_S * 1000,
           auditExtras: (result) => {
             const a = args as Input;
+            // GPT-review #3: sha256 + byte length by default; the remote command
+            // prefix only when config.auditVerbose (it can carry a secret).
             const base: Record<string, unknown> = {
               host: a.host,
-              command_prefix: a.command.slice(0, AUDIT_COMMAND_PREFIX_CAP),
-              command_length: Buffer.byteLength(a.command, "utf8"),
-              truncated_at: AUDIT_COMMAND_PREFIX_CAP,
+              ...auditContentFields("command", a.command, config.auditVerbose, AUDIT_COMMAND_PREFIX_CAP),
             };
             if (!result.ok) return base;
             const v = result.value as SshExecResult;

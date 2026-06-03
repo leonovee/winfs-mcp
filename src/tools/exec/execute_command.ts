@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
+import { auditContentFields } from "../../core/audit.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import { checkAllowed } from "../../core/allowed_roots.js";
 import { checkExecBlocklist } from "../../core/exec_safety.js";
@@ -67,21 +68,14 @@ interface ExecuteCommandResult extends Record<string, unknown> {
   hints?: string[];
 }
 
-interface ExecAuditExtras {
-  composed_prefix: string;
-  composed_length: number;
-  stdout_prefix: string;
-  stderr_prefix: string;
-  truncated_at_audit: number;
-}
+const auditByResult = new WeakMap<object, Record<string, unknown>>();
 
-const auditByResult = new WeakMap<object, ExecAuditExtras>();
-
-export function getExecuteCommandAuditExtras(value: ExecuteCommandResult): ExecAuditExtras | undefined {
+export function getExecuteCommandAuditExtras(value: ExecuteCommandResult): Record<string, unknown> | undefined {
   return auditByResult.get(value);
 }
 
 const AUDIT_PREFIX_CAP = 4 * 1024;
+const COMPOSED_PREFIX_CAP = 64;
 
 export async function executeCommandImpl(
   args: Input,
@@ -231,12 +225,14 @@ export async function executeCommandImpl(
     timed_out: spawnRes.timedOut,
     ...(hints.length > 0 ? { hints } : {}),
   };
+  // GPT-review #3: sha256 + byte length by default; content prefixes (composed
+  // command, stdout, stderr) only when config.auditVerbose. A prefix can leak a
+  // secret on the command line or on output line 1.
+  const verbose = config.auditVerbose;
   auditByResult.set(value, {
-    composed_prefix: composed.slice(0, 64),
-    composed_length: composed.length,
-    stdout_prefix: spawnRes.stdout.slice(0, AUDIT_PREFIX_CAP),
-    stderr_prefix: spawnRes.stderr.slice(0, AUDIT_PREFIX_CAP),
-    truncated_at_audit: AUDIT_PREFIX_CAP,
+    ...auditContentFields("composed", composed, verbose, COMPOSED_PREFIX_CAP),
+    ...auditContentFields("stdout", spawnRes.stdout, verbose, AUDIT_PREFIX_CAP),
+    ...auditContentFields("stderr", spawnRes.stderr, verbose, AUDIT_PREFIX_CAP),
   });
   return ok(value);
 }
@@ -287,8 +283,10 @@ EBLOCKED (blocklist hit, see details.pattern), EIO (spawn failure),
 ETIMEDOUT surfaced as \`timed_out: true\` + truncated output (not as an error
 code) so callers receive partial diagnostics.
 
-Audit log records command PREFIX (first 64 chars), full length, stdout/stderr
-first 4 KB — NEVER full output, NEVER full command (passwords on CLI).`,
+Audit log records the SHA-256 digest + byte length of the composed command and
+of stdout/stderr — NEVER the content (a prefix can leak a CLI password or a
+secret on output line 1). Set config.auditVerbose=true to ALSO record 64-char /
+4 KB prefixes for debugging.`,
       inputSchema: InputShape,
       outputSchema: OutputShape,
       annotations: {
@@ -318,7 +316,7 @@ first 4 KB — NEVER full output, NEVER full command (passwords on CLI).`,
           auditExtras: (result) => {
             if (!result.ok) {
               return {
-                composed_length: ((args as Input).command ?? "").length,
+                command_bytes: Buffer.byteLength((args as Input).command ?? "", "utf8"),
               };
             }
             const extras = getExecuteCommandAuditExtras(result.value as ExecuteCommandResult);
