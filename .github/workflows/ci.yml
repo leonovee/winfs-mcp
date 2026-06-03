@@ -1,0 +1,55 @@
+name: CI
+
+# winfs is a Windows-only MCP server (win32 spawn semantics, PowerShell dispatch,
+# Windows path canonicalisation), so CI runs exclusively on windows-latest across
+# the supported Node range. See package.json "engines": node >= 18.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Cancel an in-progress run when a newer commit lands on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build + test (Node ${{ matrix.node }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18", "20", "22"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install (clean, from lockfile)
+        run: npm ci
+
+      - name: Build (tsc)
+        run: npm run build
+
+      - name: Test (vitest)
+        run: npm test
+
+      # Gate: any advisory in the PRODUCTION dependency tree fails the build.
+      # The runtime surface is tiny (@modelcontextprotocol/sdk, diff, zod), so a
+      # clean prod tree is the bar we hold. Pre-existing dev-only advisories
+      # (vitest/tsx/etc.) are reported in the next step but do NOT fail CI.
+      - name: Audit production deps (gate)
+        run: npm audit --omit=dev
+
+      - name: Audit all deps (report only — never fails the build)
+        run: npm audit
+        continue-on-error: true

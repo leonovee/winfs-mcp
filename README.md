@@ -1,5 +1,7 @@
 # mcp-winfs
 
+[![CI](https://github.com/leonovee/winfs-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/leonovee/winfs-mcp/actions/workflows/ci.yml)
+
 A focused MCP server for the Windows 10/11 filesystem. Built to replace the
 Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
