@@ -91,6 +91,22 @@ const OutputShape = {
   next_offset: z.number().int().nonnegative().optional(),
 } as const;
 
+// P2.7: cap a single stored line (the matched line and each context line).
+// Without this an attacker-controlled file with one enormous line (no newline)
+// is held verbatim in match.match and serialized into the response — a memory
+// DoS. Lines longer than the cap are truncated with a marker; matches are for
+// display, not byte-exact transport.
+const MAX_MATCH_LINE_CHARS = 4096;
+
+function capLine(s: string): string {
+  if (s.length <= MAX_MATCH_LINE_CHARS) return s;
+  let end = MAX_MATCH_LINE_CHARS;
+  // Don't slice in the middle of a surrogate pair (would emit a lone surrogate).
+  const last = s.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${s.slice(0, end)}…[+${s.length - end} chars truncated]`;
+}
+
 interface Match {
   file: string;
   line: number;
@@ -139,12 +155,12 @@ async function searchFile(
     // silent false negatives. One-line guarantee against that regression.
     re.lastIndex = 0;
     if (!re.test(line)) continue;
-    const match: Match = { file: filePath, line: i + 1, match: line };
+    const match: Match = { file: filePath, line: i + 1, match: capLine(line) };
     if (contextLines > 0) {
       const before = lines.slice(Math.max(0, i - contextLines), i);
       const after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines));
-      if (before.length > 0) match.context_before = before;
-      if (after.length > 0) match.context_after = after;
+      if (before.length > 0) match.context_before = before.map(capLine);
+      if (after.length > 0) match.context_after = after.map(capLine);
     }
     entries.push(match);
     if (entries.length >= remaining) break;
@@ -184,12 +200,12 @@ async function searchFileFull(
     // P2.5 defensive reset — see searchFile for rationale.
     re.lastIndex = 0;
     if (!re.test(line)) continue;
-    const match: Match = { file: filePath, line: i + 1, match: line };
+    const match: Match = { file: filePath, line: i + 1, match: capLine(line) };
     if (contextLines > 0) {
       const before = lines.slice(Math.max(0, i - contextLines), i);
       const after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines));
-      if (before.length > 0) match.context_before = before;
-      if (after.length > 0) match.context_after = after;
+      if (before.length > 0) match.context_before = before.map(capLine);
+      if (after.length > 0) match.context_after = after.map(capLine);
     }
     entries.push(match);
   }
