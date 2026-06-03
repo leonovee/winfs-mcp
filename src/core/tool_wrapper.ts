@@ -34,6 +34,16 @@ export interface ToolContext {
   /** Per-call timeout override (max). Defaults to config.defaultTimeoutMs. */
   timeoutMs?: number;
   /**
+   * Per-call ceiling override for `timeoutMs`. Defaults to
+   * `config.maxTimeoutMs`. Long-running exec tools (execute_command,
+   * run_python, run_pytest, ssh_exec) raise this to their own max
+   * (e.g. shellMaxTimeoutMs) so the OUTER withTimeout doesn't clamp a
+   * legitimately-long call down to the general 60 s ceiling — which would
+   * fire before the tool's inner deadline and surface a misleading
+   * "exceeded <default>ms" error.
+   */
+  maxTimeoutMs?: number;
+  /**
    * Optional hook that returns extra audit-only metadata after the impl
    * resolves. Merged into `args_summary` on the audit record so tools can
    * surface totals (e.g., full files_skipped_total before response capping)
@@ -86,7 +96,7 @@ export async function runTool<TArgs extends Record<string, unknown>, TValue exte
   const timeoutMs = resolveTimeoutMs(
     ctx.timeoutMs,
     ctx.config.defaultTimeoutMs,
-    ctx.config.maxTimeoutMs,
+    ctx.maxTimeoutMs ?? ctx.config.maxTimeoutMs,
   );
 
   let result: Result<TValue>;

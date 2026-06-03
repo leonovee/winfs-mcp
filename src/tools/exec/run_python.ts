@@ -26,6 +26,10 @@ const InputShape = {
   timeout_ms: z.number().int().positive().optional(),
 } as const;
 
+// Inner spawn deadline sits this far below runTool's outer withTimeout so the
+// graceful inner timeout fires first (see grep / execute_command).
+const OUTER_TIMEOUT_BUFFER_MS = 2000;
+
 export const InputSchema = z.object(InputShape).strict();
 export type Input = z.infer<typeof InputSchema>;
 
@@ -70,6 +74,9 @@ export async function runPythonImpl(
   args: Input,
   config: ResolvedConfig,
   signal?: AbortSignal,
+  /** Inner spawn deadline (registered tool passes outer − BUFFER); derived
+   *  from the general timeout pair when omitted. */
+  deadlineMsOverride?: number,
 ): Promise<Result<RunPythonResult>> {
   // Validate the mode-specific input combination.
   if (args.mode === "inline" && args.script === undefined) {
@@ -133,11 +140,9 @@ export async function runPythonImpl(
       ? ["-c", args.script!, ...args.args]
       : [scriptPath!, ...args.args];
 
-  const deadline = resolveTimeoutMs(
-    args.timeout_ms,
-    config.defaultTimeoutMs,
-    config.maxTimeoutMs,
-  );
+  const deadline =
+    deadlineMsOverride ??
+    resolveTimeoutMs(args.timeout_ms, config.defaultTimeoutMs, config.maxTimeoutMs);
 
   const spawnRes = await spawnSubprocess({
     bin: pythonBin,
@@ -222,11 +227,18 @@ Errors: EINVAL (mode/arg mismatch), EPERM_ROOT (cwd or path outside roots), ENOE
         openWorldHint: true,
       },
     },
-    async (args) =>
-      runTool(
+    async (args) => {
+      const outerDeadline = resolveTimeoutMs(
+        (args as Input).timeout_ms,
+        config.defaultTimeoutMs,
+        config.maxTimeoutMs,
+      );
+      const innerDeadline = Math.max(1, outerDeadline - OUTER_TIMEOUT_BUFFER_MS);
+      return runTool(
         {
           tool: "run_python",
           config,
+          timeoutMs: outerDeadline,
           auditExtras: (result) => {
             if (!result.ok) {
               return { mode: (args as Input).mode };
@@ -236,7 +248,8 @@ Errors: EINVAL (mode/arg mismatch), EPERM_ROOT (cwd or path outside roots), ENOE
           },
         },
         args,
-        (a, sig) => runPythonImpl(a as Input, config, sig),
-      ),
+        (a, sig) => runPythonImpl(a as Input, config, sig, innerDeadline),
+      );
+    },
   );
 }

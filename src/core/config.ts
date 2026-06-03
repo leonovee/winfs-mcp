@@ -12,7 +12,13 @@ const CONFIG_SCHEMA = z
     defaultTimeoutMs: z.number().int().positive().default(10_000),
     maxTimeoutMs: z.number().int().positive().default(60_000),
     shellTimeoutMs: z.number().int().positive().default(30_000),
-    shellMaxTimeoutMs: z.number().int().positive().default(300_000),
+    // Hard ceiling for execute_command (and the other exec tools') per-call
+    // timeout_ms. Raised 300_000 → 600_000 (10 min) so a long build (6–8 min)
+    // is runnable via a high timeout_ms. NOTE: Claude Desktop imposes a
+    // SEPARATE ~4-min MCP-transport ceiling upstream — that is not winfs's
+    // valve and is out of scope here. Raise this further in config if a build
+    // legitimately exceeds 10 min.
+    shellMaxTimeoutMs: z.number().int().positive().default(600_000),
     fetchUrlMaxBytes: z.number().int().positive().default(5 * 1024 * 1024),
     fetchUrlTimeoutMs: z.number().int().positive().default(15_000),
     readMaxBytes: z.number().int().positive().default(10 * 1024 * 1024),

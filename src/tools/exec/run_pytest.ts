@@ -23,6 +23,10 @@ const InputShape = {
   timeout_ms: z.number().int().positive().optional(),
 } as const;
 
+// Inner spawn deadline sits this far below runTool's outer withTimeout so the
+// graceful inner timeout fires first (see grep / execute_command).
+const OUTER_TIMEOUT_BUFFER_MS = 2000;
+
 export const InputSchema = z.object(InputShape).strict();
 export type Input = z.infer<typeof InputSchema>;
 
@@ -95,6 +99,9 @@ export async function runPytestImpl(
   args: Input,
   config: ResolvedConfig,
   signal?: AbortSignal,
+  /** Inner spawn deadline (registered tool passes outer − BUFFER); derived
+   *  from the general timeout pair when omitted. */
+  deadlineMsOverride?: number,
 ): Promise<Result<RunPytestResult>> {
   const cwdCheck = await checkAllowed(args.cwd, config);
   if ("ok" in cwdCheck && cwdCheck.ok === false) return cwdCheck;
@@ -111,11 +118,9 @@ export async function runPytestImpl(
     pyArgs.push(args.test_filter);
   }
 
-  const deadline = resolveTimeoutMs(
-    args.timeout_ms,
-    config.defaultTimeoutMs,
-    config.maxTimeoutMs,
-  );
+  const deadline =
+    deadlineMsOverride ??
+    resolveTimeoutMs(args.timeout_ms, config.defaultTimeoutMs, config.maxTimeoutMs);
 
   const spawnRes = await spawnSubprocess({
     bin: pythonBin,
@@ -205,9 +210,16 @@ Errors: EPERM_ROOT, EPYTHONNOTFOUND, EPARSE (unrecognized output), EIO.`,
         openWorldHint: true,
       },
     },
-    async (args) =>
-      runTool({ tool: "run_pytest", config }, args, (a, sig) =>
-        runPytestImpl(a as Input, config, sig),
-      ),
+    async (args) => {
+      const outerDeadline = resolveTimeoutMs(
+        (args as Input).timeout_ms,
+        config.defaultTimeoutMs,
+        config.maxTimeoutMs,
+      );
+      const innerDeadline = Math.max(1, outerDeadline - OUTER_TIMEOUT_BUFFER_MS);
+      return runTool({ tool: "run_pytest", config, timeoutMs: outerDeadline }, args, (a, sig) =>
+        runPytestImpl(a as Input, config, sig, innerDeadline),
+      );
+    },
   );
 }

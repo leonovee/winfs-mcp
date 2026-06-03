@@ -15,6 +15,10 @@ import type { ToolContext } from "../../core/tool_context.js";
 
 const MAX_COMMAND_LEN = 8 * 1024;
 const MAX_ARGS_LEN = 64;
+// The inner spawn deadline is set this far below runTool's outer withTimeout so
+// the inner deadline (graceful `timed_out: true` + partial output + tree-kill)
+// always fires first. Mirrors grep's OUTER_TIMEOUT_BUFFER_MS.
+const OUTER_TIMEOUT_BUFFER_MS = 2000;
 
 const InputShape = {
   command: z
@@ -28,7 +32,14 @@ const InputShape = {
     .default([])
     .describe("Extra args appended to `command` for the composed string. NOT passed as positional pwsh args (those would require shell quoting we don't perform)."),
   cwd: AbsolutePath.optional().describe("Working directory; must be inside allowedRoots. Defaults to allowedRoots[0]."),
-  timeout_ms: z.number().int().positive().optional(),
+  timeout_ms: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "Per-call timeout in ms. Default 30000 (shellTimeoutMs). Honored up to the HARD MAX shellMaxTimeoutMs (default 600000 = 10 min) — pass a high value for long builds. NOTE: Claude Desktop applies a SEPARATE ~4-min MCP-transport ceiling upstream; that is not this timeout. On expiry the command is tree-killed and the response carries timed_out:true with partial output (not an error).",
+    ),
 } as const;
 
 export const InputSchema = z.object(InputShape).strict();
@@ -76,6 +87,11 @@ export async function executeCommandImpl(
   args: Input,
   config: ResolvedConfig,
   signal?: AbortSignal,
+  /** Inner spawn deadline; when omitted, derived from the shell timeout pair.
+   *  The registered tool passes `outer − BUFFER` so the inner deadline (which
+   *  surfaces the graceful `timed_out: true`) always fires before runTool's
+   *  outer withTimeout. */
+  deadlineMsOverride?: number,
 ): Promise<Result<ExecuteCommandResult>> {
   // Compose the full command string. Args are joined with single spaces —
   // caller is responsible for quoting if they need preservation.
@@ -126,11 +142,9 @@ export async function executeCommandImpl(
   // (SIGTERM → taskkill /F /T); the per-call timeout_ms override is honored,
   // clamped to shellMaxTimeoutMs. Timeout is surfaced as `timed_out: true`
   // inside the ok() envelope (documented v0.7 contract), never as an error.
-  const deadline = resolveTimeoutMs(
-    args.timeout_ms,
-    config.shellTimeoutMs,
-    config.shellMaxTimeoutMs,
-  );
+  const deadline =
+    deadlineMsOverride ??
+    resolveTimeoutMs(args.timeout_ms, config.shellTimeoutMs, config.shellMaxTimeoutMs);
 
   // PowerShell as dispatch shell with v0.7.2 H2 hardening:
   //   -NoProfile         no user profile (else PATH / encoding may shift)
@@ -258,7 +272,9 @@ Args:
   - command (string): PowerShell expression
   - args (string[], default []): extra tokens appended after a space
   - cwd (string, optional): defaults to allowedRoots[0]
-  - timeout_ms (number, optional)
+  - timeout_ms (number, optional): default 30000; hard max shellMaxTimeoutMs
+    (default 600000 = 10 min). Pass a high value for a 6–8 min build. The
+    separate ~4-min Claude Desktop transport ceiling is upstream, not this.
 
 Returns: { stdout, stderr, exit_code, duration_ms, truncated_stdout, truncated_stderr, timed_out, hints? }
   - \`hints\` is an array of short diagnostic strings when stderr matches a known
@@ -282,11 +298,23 @@ first 4 KB — NEVER full output, NEVER full command (passwords on CLI).`,
         openWorldHint: true,
       },
     },
-    async (args) =>
-      runTool(
+    async (args) => {
+      // Coordinate the outer (runTool withTimeout) and inner (spawn) deadlines:
+      // outer honors timeout_ms up to shellMaxTimeoutMs (raising runTool's
+      // ceiling via maxTimeoutMs so it isn't clamped to the general 60 s max);
+      // inner = outer − BUFFER so the graceful timed_out path fires first.
+      const outerDeadline = resolveTimeoutMs(
+        (args as Input).timeout_ms,
+        config.shellTimeoutMs,
+        config.shellMaxTimeoutMs,
+      );
+      const innerDeadline = Math.max(1, outerDeadline - OUTER_TIMEOUT_BUFFER_MS);
+      return runTool(
         {
           tool: "execute_command",
           config,
+          timeoutMs: outerDeadline,
+          maxTimeoutMs: config.shellMaxTimeoutMs,
           auditExtras: (result) => {
             if (!result.ok) {
               return {
@@ -298,7 +326,8 @@ first 4 KB — NEVER full output, NEVER full command (passwords on CLI).`,
           },
         },
         args,
-        (a, sig) => executeCommandImpl(a as Input, config, sig),
-      ),
+        (a, sig) => executeCommandImpl(a as Input, config, sig, innerDeadline),
+      );
+    },
   );
 }
