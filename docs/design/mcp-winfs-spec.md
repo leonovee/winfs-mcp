@@ -1356,7 +1356,7 @@ Bounded by four config fields, all added to `CONFIG_SCHEMA`:
   - `env` merged on top of `buildExecEnv(config)`; subprocess PATH stays `sanitizedPath`.
 - Output: `{ session_id, started_at, status, command_prefix }`. `status` is `running` on the happy path, `spawn_failed` if the OS rejected the binary synchronously or asynchronously.
 - Errors: `EBLOCKED`, `EPERM_ROOT`, `ENOTDIR`, `ENOENT` (cwd missing), `EBUSY` (concurrency cap).
-- Audit (mutation, carries `mode`): `command_prefix` (256), `command_length`, `cwd`, `env_key_count`, `timeout_seconds`, `session_id`, `status`. Raw command body NEVER persisted.
+- Audit (mutation, carries `mode`): `command_sha256`, `command_bytes`, `cwd`, `env_key_count`, `timeout_seconds`, `session_id`, `status`. The command is stored as a SHA-256 digest + byte length, NEVER the text (invariant #46); the caller-facing `command_prefix` in the *response* (and in `list_process` output) is unaffected. `config.auditVerbose=true` adds a 256-char audit `command_prefix`.
 
 **§Z.5. `interact` tool contract.**
 
@@ -1787,9 +1787,10 @@ Node 18/20/22: `npm ci` → build → test → `npm audit --omit=dev` (gate) + �
 **Acceptance backfills.** `docs/v0.9-acceptance.md`, `docs/v0.10-acceptance.md`;
 README acceptance-цепочка v0.1 → v0.10 полная.
 
-**Остаток (flagged, не исправлено).** `start_process` / `list_process` всё ещё
-отдают `command_prefix` (256) — но там это объявленное OUTPUT-поле (caller-facing,
-caller-supplied command), завязанное на контракт вывода: отдельное решение, не
-часть этой волны.
+**Остаток (закрыт в v1.0.0).** `start_process` `auditExtras` тоже переведён на
+`command_sha256` + `command_bytes` (последний audit-leak того же класса —
+инвариант #46). OUTPUT-поле `command_prefix` (в ответе `start_process` и в
+`list_process`) оставлено как есть: оно caller-facing и caller-supplied, не
+запись-в-покое. `list_process` read-only и команд в audit вообще не пишет.
 
 **Wave summary.** Spec invariant set grew #45 → #46 (+1). Версия 0.10.2 → 0.10.3.

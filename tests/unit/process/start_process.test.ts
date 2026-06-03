@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as path from "node:path";
-import { startProcessImpl } from "../../../src/tools/system/start_process.js";
+import { startProcessImpl, getStartProcessAuditExtras } from "../../../src/tools/system/start_process.js";
 import { ProcessRegistry } from "../../../src/core/process_registry.js";
 import { makeTempConfig, cleanupTempConfig } from "../../helpers.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
@@ -44,6 +44,42 @@ describe("tools/system/start_process", { timeout: 30_000 }, () => {
     expect(snap.status).toBe("exited");
     expect(snap.exit_code).toBe(0);
     expect(snap.stdout).toMatch(/hi/);
+  });
+
+  it("audit extras: command stored as sha256 + byte length, NEVER a prefix (output field unchanged)", async () => {
+    const secret = "SECRET-TOKEN-xyz";
+    const res = await startProcessImpl(
+      { command: echoArgv(secret), cwd: root },
+      config,
+      registry,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected ok");
+    // The caller-facing OUTPUT field is intentionally unchanged.
+    expect(res.value.command_prefix).toContain(secret);
+    // The AUDIT extras must NOT carry the command text by default.
+    const extras = getStartProcessAuditExtras(res.value);
+    expect(extras).toBeDefined();
+    expect(JSON.stringify(extras)).not.toContain(secret);
+    expect(extras!.command_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(typeof extras!.command_bytes).toBe("number");
+    expect(extras!.command_prefix).toBeUndefined();
+    await registry.get(res.value.session_id)!.waitForSettle(5000);
+  });
+
+  it("audit extras: command_prefix restored when config.auditVerbose=true", async () => {
+    const verbose: ResolvedConfig = { ...config, auditVerbose: true };
+    const res = await startProcessImpl(
+      { command: echoArgv("hello-v"), cwd: root },
+      verbose,
+      registry,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected ok");
+    const extras = getStartProcessAuditExtras(res.value);
+    expect(typeof extras!.command_prefix).toBe("string");
+    expect(extras!.command_sha256).toMatch(/^[0-9a-f]{64}$/);
+    await registry.get(res.value.session_id)!.waitForSettle(5000);
   });
 
   it("cwd outside allowedRoots → EPERM_ROOT", async () => {

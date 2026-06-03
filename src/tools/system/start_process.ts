@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import type { ProcessRegistry } from "../../core/process_registry.js";
 import { runTool } from "../../core/tool_wrapper.js";
+import { auditContentFields } from "../../core/audit.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import { checkAllowed } from "../../core/allowed_roots.js";
 import { checkExecBlocklist } from "../../core/exec_safety.js";
@@ -53,19 +54,9 @@ interface StartProcessResult extends Record<string, unknown> {
   command_prefix: string;
 }
 
-interface StartProcessAuditExtras {
-  command_prefix: string;
-  command_length: number;
-  cwd: string;
-  env_key_count: number;
-  timeout_seconds: number;
-  session_id: string;
-  status: string;
-}
+const auditByResult = new WeakMap<object, Record<string, unknown>>();
 
-const auditByResult = new WeakMap<object, StartProcessAuditExtras>();
-
-export function getStartProcessAuditExtras(value: StartProcessResult): StartProcessAuditExtras | undefined {
+export function getStartProcessAuditExtras(value: StartProcessResult): Record<string, unknown> | undefined {
   return auditByResult.get(value);
 }
 
@@ -127,9 +118,12 @@ export async function startProcessImpl(
     command_prefix: composed.slice(0, 256),
   };
 
+  // GPT-review #3 (closeout): the AUDIT log stores sha256 + byte length of the
+  // composed command, never a prefix (a secret can ride in argv). The
+  // caller-facing OUTPUT `command_prefix` above is intentionally left as-is.
+  // config.auditVerbose restores the audit prefix for debugging.
   auditByResult.set(value, {
-    command_prefix: composed.slice(0, 256),
-    command_length: composed.length,
+    ...auditContentFields("command", composed, config.auditVerbose, 256),
     cwd,
     env_key_count: Object.keys(extraEnv).length,
     timeout_seconds: timeoutSeconds,
@@ -178,9 +172,12 @@ Returns: { session_id, started_at, status, command_prefix }
 Errors: EBLOCKED (blocklist), EPERM_ROOT, ENOTDIR, ENOENT (cwd missing),
 EBUSY (concurrency cap).
 
-Audit (mutation): command_prefix, command_length, cwd, env_key_count,
-timeout_seconds, session_id, status. Carries \`mode\`. Full command body
-is NEVER persisted.`,
+Audit (mutation): command_sha256, command_bytes, cwd, env_key_count,
+timeout_seconds, session_id, status. Carries \`mode\`. The command is stored as
+a SHA-256 digest + byte length, NEVER the text (a secret can ride in argv); the
+caller-facing \`command_prefix\` in the RESPONSE is unaffected. Set
+config.auditVerbose=true to ALSO record a 256-char audit command_prefix.`,
+
       inputSchema: InputShape,
       outputSchema: OutputShape,
       annotations: {
@@ -197,10 +194,8 @@ is NEVER persisted.`,
           config,
           auditExtras: (result) => {
             if (!result.ok) {
-              return {
-                command_prefix: ((args as Input).command ?? []).join(" ").slice(0, 256),
-                command_length: ((args as Input).command ?? []).join(" ").length,
-              };
+              const composed = ((args as Input).command ?? []).join(" ");
+              return auditContentFields("command", composed, config.auditVerbose, 256);
             }
             const extras = getStartProcessAuditExtras(result.value as StartProcessResult);
             return extras ? { ...extras } : {};
