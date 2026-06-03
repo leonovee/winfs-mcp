@@ -16,7 +16,7 @@
 // Exit 0 = all green; exit 1 = any red. Requires `npm run mcpb` first.
 
 import { spawn, execFileSync } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { promises as fs, existsSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,15 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 const pkg = JSON.parse(await fs.readFile(path.join(ROOT, "package.json"), "utf8"));
 const VERSION = pkg.version;
 const MCPB = path.join(ROOT, "dist-mcpb", `winfs-${VERSION}.mcpb`);
+
+// Pin the Windows-bundled bsdtar explicitly. A bare "tar" can resolve to GNU
+// tar (e.g. Git-for-Windows usr/bin on the PATH of an MSYS / Bash shell), which
+// cannot extract a zip and fails with "This does not look like a tar archive".
+// System32\tar.exe is libarchive bsdtar and handles the .mcpb (zip) on Win10+.
+// Fall back to bare "tar" only if the absolute path isn't present.
+const SYSTEM_ROOT = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+const SYSTEM32_TAR = path.join(SYSTEM_ROOT, "System32", "tar.exe");
+const TAR_BIN = existsSync(SYSTEM32_TAR) ? SYSTEM32_TAR : "tar";
 
 const results = [];
 const ok = (name, detail) => results.push({ name, pass: true, detail });
@@ -75,7 +84,7 @@ async function main() {
   const work = await fs.mkdtemp(path.join(os.tmpdir(), "winfs-mcpb-smoke-"));
   const unpack = path.join(work, "unpack");
   await fs.mkdir(unpack, { recursive: true });
-  execFileSync("tar", ["-xf", MCPB, "-C", unpack], { stdio: "ignore" });
+  execFileSync(TAR_BIN, ["-xf", MCPB, "-C", unpack], { stdio: "ignore" });
   const launcher = path.join(unpack, "server", "launch.mjs");
   try { await fs.access(launcher); ok("archive intact: server/launch.mjs", "found"); }
   catch { fail("archive intact: server/launch.mjs", "found", "missing in archive"); return; }
