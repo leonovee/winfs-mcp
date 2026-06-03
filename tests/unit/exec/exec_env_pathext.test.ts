@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   buildExecEnv,
   buildSessionEnv,
+  sanitizedPathDirs,
   STANDARD_WINDOWS_PATHEXT,
 } from "../../../src/core/exec_safety.js";
 import type { ResolvedConfig } from "../../../src/core/config.js";
@@ -36,6 +37,24 @@ describe("core/exec_safety PATHEXT hardening (Phase C)", () => {
     const env = buildExecEnv(cfg({ execSanitizeEnv: true }));
     expect(env.PATHEXT).toBe(STANDARD_WINDOWS_PATHEXT);
     expect(env.PATHEXT).toContain(".EXE");
+  });
+
+  // ── P2.4: extra PATH dirs for non-standard Git / MSYS2 installs ───────────
+
+  it("sanitizedPathDirs appends configured execExtraPathDirs", () => {
+    const dirs = sanitizedPathDirs(
+      cfg({ execExtraPathDirs: ["C:\\Tools\\git\\bin", "C:\\msys64\\usr\\bin"] } as Partial<ResolvedConfig>),
+    );
+    expect(dirs).toContain("C:\\Tools\\git\\bin");
+    expect(dirs).toContain("C:\\msys64\\usr\\bin");
+    expect(dirs).toContain("C:\\Windows\\System32"); // standard dirs still present
+  });
+
+  it("sanitizedPathDirs is unchanged when execExtraPathDirs is absent/empty", () => {
+    expect(sanitizedPathDirs(cfg({}))).toContain("C:\\Windows\\System32");
+    expect(sanitizedPathDirs(cfg({ execExtraPathDirs: [] } as Partial<ResolvedConfig>))).toContain(
+      "C:\\Program Files\\Git\\cmd",
+    );
   });
 
   it("sets GIT_TERMINAL_PROMPT=0 in both modes (Phase E — git never hangs on a credential prompt)", () => {

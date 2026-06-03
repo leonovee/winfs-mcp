@@ -29,6 +29,11 @@ const CONFIG_SCHEMA = z
     execExtraBlocklist: z.array(z.string()).default([]),
     // v0.5: python binary lookup root; if set, <pythonHome>/python.exe used
     pythonHome: z.string().optional(),
+    // P2.4: extra absolute dirs appended to the sanitized subprocess PATH, for
+    // non-standard tool installs (portable Git, MSYS2, chocolatey shims) that
+    // the hardcoded standard locations don't cover. Explicit operator opt-in —
+    // does NOT inherit the user's $PATH (spec invariant Step 1 #10 preserved).
+    execExtraPathDirs: z.array(z.string()).default([]),
     // v0.5: sanitize subprocess env (drop user $PATH and everything outside USERPROFILE/LOCALAPPDATA)
     execSanitizeEnv: z.boolean().default(false),
     // v0.6: configurable filesystem scope. When true (and the magic-string

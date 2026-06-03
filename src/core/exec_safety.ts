@@ -167,6 +167,8 @@ export function sanitizedPathDirs(config: ResolvedConfig): string[] {
     "C:\\Program Files\\nodejs",
   ];
   if (config.pythonHome) parts.push(config.pythonHome);
+  // P2.4: operator-supplied extra dirs for non-standard tool installs.
+  if (config.execExtraPathDirs?.length) parts.push(...config.execExtraPathDirs);
   return parts;
 }
 
