@@ -5,6 +5,52 @@ All notable changes to mcp-winfs are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-06-03 — MCPB packaging + production README/spec rewrite
+
+A packaging-and-docs wave. **No new tools** — the surface stays frozen at 39
+(since v0.8). This is explicitly **not** the v1.0.0 release: the v1.0 milestone
+remains gated on the full 10-question eval suite (≥ 80 % pass through MCP) plus
+production sign-off, which is still ahead. See spec §7 / §10.
+
+### Added
+
+- **MCPB bundle (`mcpb/`).** One-file drag-install for Claude Desktop alongside
+  the existing manual `--config` path (which is unchanged).
+  - `mcpb/manifest.json` — manifest v0.4. `server.mcp_config` launches the
+    **shim** `mcpb/launch.mjs`, not the server directly. `user_config` exposes
+    `allowedRoots` (directory, multiple, required), `execExtraPathDirs`,
+    `sshExePath`, `powershellExePath`, `pythonHome`, `unrestrictedFilesystem`
+    (default false) and `unrestrictedFilesystemConfirm`.
+  - `mcpb/launch.mjs` — collects `user_config` from argv (arrays) + env
+    (scalars), defensively drops unsubstituted `${…}` placeholders, overlays the
+    bundled safety baseline (`configs/default.json`), atomically writes a
+    **dedicated** `%LOCALAPPDATA%\mcp-winfs\mcpb-config.json` (never the manual
+    `config.json`), and hands off to the real server in-process via `--config`.
+  - `scripts/build-mcpb.mjs` (`npm run mcpb`) — compiles, stages `dist` +
+    production-only `node_modules` + shim + baseline, syncs the version from
+    `package.json` into the manifest, then `mcpb validate` + `mcpb pack` →
+    `dist-mcpb/winfs-<version>.mcpb`.
+  - `scripts/smoke/mcpb-smoke.mjs` — extracts the packed `.mcpb` and drives the
+    bundled launcher over stdio exactly as Claude Desktop would (handshake +
+    `tools/list` + in-root read + out-of-root refusal + config-mapping checks).
+    **9/9 green.**
+- **`npm run smoke`** (`scripts/smoke/v0.7-smoke.mjs`) and **`npm run mcpb`**
+  script aliases in `package.json`.
+- **Invariant #45** — MCPB `user_config` maps onto the runtime config **without
+  bypassing enforcement**: `allowedRoots` from the Configure UI takes the same
+  realpath→prefix check; the shim never synthesises the unrestricted-mode
+  confirm string; only keys the strict Zod schema accepts are written. Spec §AD.
+- **Acceptance-doc backfills** for v0.7 (`docs/v0.7-acceptance.md`) and v0.8
+  (`docs/v0.8-acceptance.md`).
+
+### Changed
+
+- **README + spec (§AD, §7) production rewrite.** Install now leads with the
+  MCPB bundle (manual clone/build is Option B); §7 phasing table reconciled to
+  actual delivery with MCPB landing in v0.10.2 and v1.0.0 marked as a planned,
+  eval-gated release.
+- Version `0.10.1 → 0.10.2`.
+
 ## [0.10.1] — 2026-06-03 — final polish: timeout ceiling, ssh auto-detect, P2 closeout
 
 A wrap-up patch wave: a high-impact timeout-ceiling fix, ssh binary

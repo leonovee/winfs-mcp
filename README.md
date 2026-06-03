@@ -5,29 +5,60 @@ Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
 UTF-8-no-BOM invariant.
 
-**Status:** v0.7 wave 1 (unreleased) — **33 tools** (5 core from v0.1 + 5
-mutations / batch / introspection from v0.2 + 4 search / self-recovery from
-v0.3 + 4 editor / slicing / diff / tail from v0.4 + 11 git / exec / system /
-network from v0.5 + 1 byte-offset chunked write from v0.6 + 3 consumer-agent
-adds from v0.7 wave 1: `ssh_exec`, `list_path_dirs`, `write_json`) and the
-full core/ invariant layer. v0.6 also adds the opt-in
-`unrestrictedFilesystem` mode (see config reference below) and the
-`edit_file.edits[].expected_count` extension (see spec amendment §W).
-The main v0.7 DC-parity wave (features A–D in the roadmap) is still
-roadmap-only.
+**Status:** **v0.10.2** — **39 tools** (5 core from v0.1 + 5 mutations / batch /
+introspection from v0.2 + 4 search / self-recovery from v0.3 + 4 editor /
+slicing / diff / tail from v0.4 + 11 git / exec / system / network from v0.5 +
+1 byte-offset chunked write from v0.6 + 3 consumer-agent adds from v0.7 wave 1
+(`ssh_exec`, `list_path_dirs`, `write_json`) + 4 process-control tools from
+v0.7 wave 2b (`start_process`, `interact`, `list_process`, `kill_process`) + 2
+filesystem-parity tools from v0.8 (`directory_tree`, `read_media_file`)) on top
+of the full core/ invariant layer. Also ships MCP-Roots support (v0.9), an
+opt-in `unrestrictedFilesystem` mode, and live hot-reload of `allowedRoots`
+(v0.10). **533 tests in 98 files, 79/79 wire-level smoke probes.**
 
 ## Install
 
+The fastest path is the prebuilt **MCPB bundle** (one file, no Node toolchain
+required); a manual clone/build is the alternative for development.
+
+### Option A — MCPB bundle (recommended)
+
+1. Download `winfs-0.10.2.mcpb` (build it with `npm run mcpb`, or grab it from
+   the GitHub release).
+2. **Drag the `.mcpb` file onto Claude Desktop** (Settings → Extensions). Claude
+   Desktop unpacks it with a bundled Node runtime — nothing else to install.
+3. In the extension's **Configure** screen, set **Allowed directories** (the
+   roots winfs may touch). Optionally set the SSH / PowerShell / Python paths
+   and extra PATH dirs. Leave **Unrestricted filesystem mode** OFF for normal
+   use.
+4. Done — winfs starts and its 39 tools appear in Claude Desktop.
+
+The bundle's Configure UI writes a dedicated
+`%LOCALAPPDATA%\mcp-winfs\mcpb-config.json` and never touches a manual
+`config.json`, so the two install methods coexist. `allowedRoots` from the UI is
+enforced exactly as a manual config; unrestricted mode still requires the
+confirm phrase (below).
+
+### Option B — manual clone / build (development)
+
 ```powershell
-git clone <repo-url> mcp-winfs
+git clone https://github.com/leonovee/winfs-mcp mcp-winfs
 cd mcp-winfs
 npm install
 npm run build
 ```
 
-Requires Node ≥ 18.
+Requires Node ≥ 18. Then write a `config.json` and wire it into Claude Desktop
+as shown under **Setup in Claude Desktop** below. Build the MCPB bundle yourself
+with `npm run mcpb` (output: `dist-mcpb/winfs-0.10.2.mcpb`).
 
 ## Configuration
+
+> **MCPB users:** configure everything (allowed directories, SSH/PowerShell/
+> Python paths, unrestricted mode) in Claude Desktop's **Configure** screen — the
+> bundle maps those fields onto the same runtime config described below. The rest
+> of this section is the reference for the **manual** `config.json` (Option B) and
+> documents every field the Configure UI exposes.
 
 The server reads its runtime config from
 `%LOCALAPPDATA%\mcp-winfs\config.json` (typically
@@ -112,7 +143,10 @@ atomic writes, bounded timeouts. Unrestricted only short-circuits the
 See spec [§U](docs/design/mcp-winfs-spec.md) for the full threat-model
 discussion and invariants #28–#30.
 
-## Setup in Claude Desktop
+## Setup in Claude Desktop (manual path)
+
+> Skip this section if you installed the MCPB bundle (Option A) — Claude Desktop
+> wires the server automatically. This is for the manual clone/build (Option B).
 
 Edit `%APPDATA%\Claude\claude_desktop_config.json` (or, on MSIX installs,
 `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
@@ -139,7 +173,7 @@ Use absolute paths for both `dist/index.js` and the config. **Do not use
 Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 `list`, `stat`) should appear in the tools list.
 
-## Tools (v0.6)
+## Tools (v0.10.2 — 39 tools)
 
 ### Core FS (v0.1)
 
@@ -237,6 +271,17 @@ process-local in-memory only. See spec amendment §Z.
 | `list_process`  | yes       | Enumerate sessions (both running and recently-settled within TTL). Returns `{ sessions, total }` sorted by `started_at` ASC. Useful for `kill_process` candidate discovery and for debugging stuck sessions. |
 | `kill_process`  | no        | Terminate a session. `force: false` (default) → Windows `taskkill /T` / POSIX SIGTERM with 5 s grace before SIGKILL escalation. `force: true` → immediate `taskkill /F /T` / SIGKILL. Idempotent: already-settled session returns `was_already_settled: true` with `exit_code` preserved. |
 
+### Filesystem-MCP parity (v0.8)
+
+| Tool              | Read-only | What it does                                                              |
+|-------------------|-----------|---------------------------------------------------------------------------|
+| `directory_tree`  | yes       | Recursive JSON tree → `{ root: { name, type, children? }, total_nodes, truncated }`. Companion to flat `list`. Args: `path`, `max_depth` (1..8, default 3), `exclude_patterns` (basename globs — `node_modules`, `.git`, `dist`, `*.tmp`). Truncates with `truncated_reason: 'max_depth' \| 'max_nodes'` (10 000 hard cap). Symlinks walked as files, never followed. |
+| `read_media_file` | yes       | Base64 reader for binary media (image / audio / video / PDF) — the companion to text-only `read`, which rejects binary with EENCODING. Streams in 64 KB chunks to avoid OOM. Returns `{ base64, content_type, bytes_read, truncated }`; `content_type` is best-effort from extension. Default 16 MB cap; oversize without `max_bytes` → ETOOLARGE. |
+
+v0.8 also extended two existing tools (non-breaking): `read` gained `head: N` /
+`tail: N` shortcuts (mutually exclusive with `range`), and `list` gained
+`sort_by: 'name' | 'size' | 'mtime'`.
+
 Every tool returns pure-payload `structuredContent` that matches its
 declared `outputSchema` 1:1 (no `ok` / `tool` envelope — see [v0.1.1
 hotfix](docs/v0.2-backlog.md#1--structuredcontent-validation-mismatch-on-every-tool-response--resolved-in-v011)).
@@ -288,48 +333,33 @@ started in one is invisible to the other. This is by design (no
 locking on a shared on-disk store), but worth flagging if you script
 across multiple clients.
 
-### Windows-flaky process tests (v0.7.1 patch scope)
+### Process registry, exec, and review-wave findings — resolved since v0.7
 
-10 tests under `tests/unit/process/*` exhibit intermittent failures on
-Windows due to EBUSY-on-rmdir during `afterEach` cleanup races (the
-test's temp directory is removed before the child process has fully
-released its handles) and timing-sensitive process-state assertions
-(`expected 'running' to be 'timed_out'` — a 1-second
-`Start-Sleep` deadline that V8 sometimes evaluates a few ms early).
-Production code is correct: the v0.7 smoke harness exercises
-`start_process` / `interact` / `list_process` / `kill_process` at the
-wire level and all 9 wave-2b probes pass deterministically. The
-flakiness is a test-side reliability issue scheduled for the v0.7.1
-patch wave (EBUSY retry with backoff on Windows tempdir removal,
-event-driven `waitForStatus` assertions in place of timeout-driven
-ones). **CI workaround:** rerun the affected suite; failures do not
-indicate a regression in production behavior.
+The items that earlier README revisions flagged as open are now closed:
 
-### Deferred v0.7 review-wave findings (v0.7.1 patch scope)
+- **Windows-flaky process tests — fixed in v0.9.1.** The 10 intermittent
+  `tests/unit/process/*` failures were root-caused (ProcessRegistry didn't
+  destroy child stdio pipes on settle, so libuv held handles and the tempdir
+  `fs.rm` hit EBUSY; the timeout handler didn't force-settle when `taskkill /F /T`
+  failed to fire `close`). `ProcessSession.settle` now destroys stdio pipes, the
+  timeout handler adds a defensive grace + force-settle, and tempdir removal uses
+  a retry ladder. The full suite (533 tests) is green.
+- **v0.7 pre-tag external review (~15 P2 findings) — closed across v0.9.1 /
+  v0.9.2 / v0.10.x.** `fetch_url` gained `EMAXREDIRECTS` and
+  `EENCODING_UNSUPPORTED` (no more silent gzip corruption), late-chunk and 3xx
+  bandwidth fixes, and trailing-dot FQDN canonicalisation; `edit_file` got UTF-8
+  codepoint-boundary diff truncation and TOCTOU fd-bound reads; `grep` got
+  streaming pagination + a per-line length cap; `execute_command` got blocklist
+  cache-key hashing and a narrowed `taskkill /F /T` pattern. The one intentional
+  non-fix is the `fetch_url` `truncated`-flag rename (P2.1) — a cosmetic
+  contract churn with no behaviour change, documented as deferred in
+  `audit/external_reviews/v0.7-pre-tag/_post-v0.9.0-status.md`.
 
-The v0.7 pre-tag external review wave produced ~15 P2 findings (full
-consolidation files at `audit/external_reviews/v0.7-pre-tag/`) that
-are deferred to v0.7.1. None are production-blocking; all are
-quality-of-implementation hardening. Highlights:
+### Dependency audit
 
-- `fetch_url` truncated-flag rewire (currently dead code in success path).
-- `fetch_url` gzip silent-corruption when server ignores
-  `Accept-Encoding: identity` — surface an `EENCODING` instead.
-- `fetch_url` `EMAXREDIRECTS` code (currently reuses `EHOSTNOTALLOWED`
-  for redirect-chain overflow — semantically wrong).
-- `fetch_url` 3xx body early-destroy (saves up to 15 MB per chain).
-- `edit_file` UTF-8 boundary in diff truncation (cuts mid-multibyte
-  sequence on non-ASCII content).
-- `edit_file` TOCTOU fd-bound read side (apply audit_tail v0.3.2
-  pattern to the read leg of edit_file).
-- `grep` stream pagination memory (`searchFileFull` accumulates all
-  matches before slicing — moderate refactor).
-- `grep` unified `truncated` semantics across timeout / max_matches /
-  ceiling (design call needed first).
-
-See `audit/external_reviews/v0.7-pre-tag/_findings_*.md` for the
-per-surface consolidation, including which reviewer(s) raised each
-finding and the recommended fix sketch.
+`npm audit` is at **0 vulnerabilities** as of v0.9.2 (the prior 7 were assessed
+0-exposed / dev-only and closed anyway — vitest 2→4, diff 7→9, qs patch). See
+`audit/security/v0.9.2-triage.md`.
 
 ## Hard invariants (always on)
 
@@ -463,19 +493,28 @@ written to stderr and auto-detect runs as a fallback.
 ## Tests
 
 ```powershell
-npm test          # vitest run
+npm test          # vitest run — 533 tests in 98 files
 npm run test:watch
+npm run smoke      # node scripts/smoke/v0.7-smoke.mjs — 79/79 wire-level probes
+npm run mcpb       # build dist-mcpb/winfs-0.10.2.mcpb, then:
+node scripts/smoke/mcpb-smoke.mjs   # 9/9 bundle-install probes
 ```
 
-v0.6 ships 293 tests in 52 files: per-tool happy path + every error code
-across 30 tools, plus invariants (UTF-8 roundtrip, junction/`..` escape,
+winfs ships **533 tests in 98 files**: per-tool happy path + every error code
+across all 39 tools, plus invariants (UTF-8 roundtrip, junction/`..` escape,
 timeout abort + grep partial-result + edit_file ETIMEDOUT, atomic-write
-integrity + edit_file dry-run-no-temp / rename-failure-no-leak +
-write_chunk non-atomic contract, audit redaction, both-roots check for
-mutations, structuredContent shape across all 30 tools, audit_tail
-privileged-read boundary + TOCTOU close, exec blocklist enforcement,
-check_env safe-prefix mathematical bound, fetch_url SSRF defense,
-unrestricted-mode short-circuit + audit `mode` field).
+integrity + edit_file dry-run-no-temp / rename-failure-no-leak + write_chunk
+non-atomic contract, audit redaction, both-roots check for mutations,
+structuredContent shape across all tools, audit_tail privileged-read boundary +
+TOCTOU close, exec blocklist enforcement, check_env safe-prefix mathematical
+bound, fetch_url SSRF defense, unrestricted-mode short-circuit + audit `mode`
+field, MCP-Roots union semantics, process-session lifecycle).
+
+A wire-level smoke harness (`scripts/smoke/v0.7-smoke.mjs`) drives the built
+server over stdio across both strict and unrestricted modes, MCP-Roots,
+transport logging and child-spawn hardening — **79/79 probes green**. A second
+harness (`scripts/smoke/mcpb-smoke.mjs`) extracts the packed `.mcpb` and proves
+the bundle installs and enforces `allowedRoots` end-to-end — **9/9 green**.
 
 ## Acceptance reports
 
@@ -485,11 +524,16 @@ unrestricted-mode short-circuit + audit `mode` field).
 - v0.4: [`docs/v0.4-acceptance.md`](docs/v0.4-acceptance.md)
 - v0.5.1: [`docs/v0.5.1-acceptance.md`](docs/v0.5.1-acceptance.md) (the `v0.5.0` tag is a phantom — reviewers should clone `--branch v0.5.1`)
 - v0.6: [`docs/v0.6-acceptance.md`](docs/v0.6-acceptance.md)
+- v0.7: [`docs/v0.7-acceptance.md`](docs/v0.7-acceptance.md) (waves 1 / 2a / 2b / 2c + pre-tag bug-fix)
+- v0.8: [`docs/v0.8-acceptance.md`](docs/v0.8-acceptance.md) (filesystem parity + ToolContext)
+- v0.9 / v0.10 acceptance backfills are pending; the authoritative record for
+  those waves is the CHANGELOG `[0.9.x]` / `[0.10.x]` entries.
 
 ## Roadmap
 
-`docs/design/mcp-winfs-spec.md` §7 has the full phasing. The §4 tool
-surface is COMPLETE at v0.6 (30 tools); v0.7+ adds no new tools.
+`docs/design/mcp-winfs-spec.md` §7 has the full phasing. The tool surface is
+**39 tools** as of v0.8 (the §4 v0.6 surface of 30, plus 3 from v0.7 wave 1, 4
+from v0.7 wave 2b, and 2 from v0.8).
 
 - ✅ **v0.1** — `read`, `write`, `append`, `list`, `stat`
 - ✅ **v0.2** — `mkdir`, `move`, `copy`, `read_multiple_files`, `list_allowed_directories`
@@ -497,6 +541,10 @@ surface is COMPLETE at v0.6 (30 tools); v0.7+ adds no new tools.
 - ✅ **v0.4** — `read_section`, `diff_files`, `edit_file` (with `dry_run`), `read_since`
 - ✅ **v0.5.1** — `git_status`, `git_log`, `git_show`, `git_diff`, `git_blame`, `execute_command`, `run_python`, `run_pytest`, `find_command`, `check_env`, `fetch_url` (the v0.5.0 tag is a phantom; see acceptance doc for reconciliation)
 - ✅ **v0.6** — `write_chunk` + `edit_file.expected_count` extension + `unrestrictedFilesystem` mode
-- 🟡 **v0.7 wave 1** (unreleased, on `main`) — `ssh_exec`, `list_path_dirs`, `write_json`. Consumer-agent feedback adds from the 2026-05-18 ecom session. Spec amendment §X.
-- **v0.7 main wave** — roadmap: DC-parity features (persistent shells via `start_process` + `interact_with_process`, async `grep` pagination, `list_processes` + `kill_process`, `edit_file` char-level diff on near-miss `EUNIQUE`). See [`prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md`](prompts/cc-prompt-mcp-winfs-v0.7-roadmap.md).
-- **v1.0** — MCPB packaging + full eval suite (10 questions, ≥ 80 % pass) + production README rewrite. No new tools.
+- ✅ **v0.7 wave 1** — `ssh_exec`, `list_path_dirs`, `write_json` (consumer-agent feedback adds; spec §X)
+- ✅ **v0.7 main wave (wave 2b) — process control** — `start_process`, `interact`, `list_process`, `kill_process` (in-memory `ProcessRegistry`; spec §Z). Wave 2a improved existing tools (`edit_file` near-miss diff, `grep` pagination, `execute_command` hints); wave 2c was the ToolContext refactor.
+- ✅ **v0.8 — filesystem-MCP parity** — `directory_tree`, `read_media_file`, `read` head/tail, `list` sort_by, `register*Tool(server, ctx)` refactor (invariant #41, spec §AB).
+- ✅ **v0.9.x — MCP Roots + security** — MCP-Roots union mode (spec §AC, invariant #42), flaky-test stabilisation, `powershellExePath`, `fetch_url` error-code hardening, `npm audit` 7 → 0.
+- ✅ **v0.10.x — child-spawn hardening + polish** — explicit PATHEXT on every spawn, `GIT_TERMINAL_PROMPT=0`, shell-timeout pair, `allowedRoots` hot-reload, opt-in `WINFS_TRANSPORT_LOG`, timeout-ceiling fix, ssh auto-detect, `execExtraPathDirs`, deferred-P2 closeout.
+- ✅ **v0.10.2 — MCPB packaging** — drag-install bundle for Claude Desktop (`winfs-0.10.2.mcpb` + Configure UI). `mcpb/manifest.json` + `mcpb/launch.mjs` map the install-time `user_config` onto the same runtime config with enforcement fully intact (spec §AD, invariant #45); `npm run mcpb` builds and `scripts/smoke/mcpb-smoke.mjs` proves the packed bundle installs and refuses out-of-root reads. No new tools.
+- ⏳ **v1.0 — release (planned)** — gated on the full 10-question eval suite (≥ 80 % pass through MCP) plus production sign-off. The eval harness (`evals/`) currently ships example questions and the `connections.py` driver; the complete question set and the `run.py` runner are still to come.

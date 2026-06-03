@@ -3,6 +3,11 @@ dist/
 coverage/
 .vitest-cache/
 *.log
+
+# MCPB bundle staging + built artifact (recreatable via scripts/build-mcpb.mjs)
+build/
+dist-mcpb/
+*.mcpb
 .DS_Store
 
 # Scratch / debug artifacts in the repo root (recreatable; never commit).

@@ -427,7 +427,7 @@ mcp-winfs/
 ├── package.json
 ├── tsconfig.json
 ├── README.md
-├── manifest.json                  # MCPB packaging (v1.1+)
+├── mcpb/                          # MCPB packaging (v0.10.2): manifest.json + launch.mjs shim
 ├── src/
 │   ├── index.ts                   # entry: парсит --config, бутстрапит server
 │   ├── server.ts                  # MCP Server setup, registerTool для каждого
@@ -464,16 +464,31 @@ mcp-winfs/
 
 ## 7. Phased Delivery
 
-| Версия | Содержание | Acceptance criteria |
+**Статус: весь функционал поставлен (v0.10.2); v1.0.0-release ещё впереди —
+гейт — полный eval suite.** Таблица ниже отражает
+**фактическую** поставку (не исходный план — он мапил exec/system/network на
+v0.6–v0.7, а по факту они вышли одной волной в v0.5.1). Детальные acceptance —
+в `docs/v*-acceptance.md`; пер-волновые поправки спецификации — в §X / §Y / §Z /
+§AA / §AB / §AC ниже. Tool surface заморожен на **39 инструментах** с v0.8.
+
+| Версия | Статус | Фактически поставлено |
 |---|---|---|
-| **v0.1** | Core 5 (read/write/append/list/stat) + все hard-инварианты + audit + config | Один tool работает end-to-end в Claude Desktop. allowed-roots блокирует попытку вне whitelist. Timeout 10s ловится. UTF-8 round-trip на файле с русским текстом без потери. |
-| **v0.2** | + Mutations (move/copy/mkdir) + read_multiple_files + list_allowed_directories | Versioning workflow можно делать без shell |
-| **v0.3** | + Search (grep/glob/read_json) + audit_tail | Поиск + self-recovery |
-| **v0.4** | + Editor (edit_file с dryRun) + Slicing (read_section/read_since/diff_files) | Surgical edits + инкрементальное чтение |
-| **v0.5** | + Git RO (log/status/diff/show/blame) | Architect git inspection |
-| **v0.6** | + Exec (execute_command/run_python/run_pytest) | Shell + Python probes с bounded timeouts |
-| **v0.7** | + System (find_command/check_env) + Network (fetch_url) | Полный набор 29 |
-| **v1.0** | Polish + MCPB packaging + README + comprehensive test suite | Production-ready |
+| **v0.1** | ✅ | Core 5 (read/write/append/list/stat) + все hard-инварианты + audit + config |
+| **v0.2** | ✅ | Mutations (mkdir/move/copy) + read_multiple_files + list_allowed_directories |
+| **v0.3** | ✅ | Search (grep/glob/read_json) + audit_tail |
+| **v0.4** | ✅ | Editor (edit_file + dry_run) + Slicing (read_section/read_since/diff_files) |
+| **v0.5.1** | ✅ | Git RO (5) + Exec (execute_command/run_python/run_pytest) + System/Network (find_command/check_env/fetch_url) — весь набор «v0.5–v0.7» исходного плана поставлен одной волной. Тег v0.5.0 — фантом. |
+| **v0.6** | ✅ | write_chunk + `edit_file.expected_count` + opt-in `unrestrictedFilesystem` (§U, инварианты #28–#30) |
+| **v0.7 wave 1** | ✅ | ssh_exec, list_path_dirs, write_json (§X) |
+| **v0.7 wave 2a** | ✅ | Улучшения существующих tools: `edit_file` near-miss diff, `grep` pagination, `execute_command` hints (§Y) |
+| **v0.7 wave 2b** | ✅ | Process control: start_process / interact / list_process / kill_process — in-memory `ProcessRegistry` (§Z, инварианты #38–#40) |
+| **v0.7 wave 2c** | ✅ | Архитектурное закрытие: `ToolContext` refactor, `register*Tool(server, ctx)` (§AB, инвариант #41) |
+| **v0.8** | ✅ | Filesystem-MCP parity: directory_tree, read_media_file, `read` head/tail, `list` sort_by → tool surface 37 → **39** |
+| **v0.9.0** | ✅ | MCP Roots union mode (§AC, инвариант #42) |
+| **v0.9.1 / v0.9.2** | ✅ | Стабилизация 10 flaky process-тестов, `powershellExePath`, `fetch_url` коды (`EMAXREDIRECTS`/`EENCODING_UNSUPPORTED`), `npm audit` 7 → 0 |
+| **v0.10.0 / v0.10.1** | ✅ | Child-spawn hardening (explicit PATHEXT — инвариант #43, `GIT_TERMINAL_PROMPT=0`, shell-timeout pair), `allowedRoots` hot-reload, opt-in `WINFS_TRANSPORT_LOG`, timeout-ceiling fix (инвариант #44), ssh auto-detect, `execExtraPathDirs`, deferred-P2 closeout |
+| **v0.10.2** | ✅ | MCPB packaging (`winfs-0.10.2.mcpb` + Configure UI, маппинг user_config → runtime config без обхода enforcement, §AD / инвариант #45), production README rewrite. Новых инструментов нет. |
+| **v1.0.0** | ⏳ | **Release — планируется.** Гейт: полный eval suite (10 вопросов, ≥ 80 % pass через MCP) + production sign-off. Сейчас в `evals/` — примеры вопросов + драйвер `connections.py`; полный набор и `run.py` ещё впереди. |
 
 ---
 
@@ -582,7 +597,7 @@ Per-tool: happy path + каждый error code.
 
 Эти решения откладываются до production-опыта, не блокируют v0.1:
 
-- **MCPB packaging.** Когда упаковываем в `.mcpb` для one-click install? Вероятно после v1.0 и недели стабильной работы.
+- **MCPB packaging.** ✅ Поставлено в v0.10.2: `mcpb/manifest.json` + `mcpb/launch.mjs` (shim user_config → runtime config), сборка `npm run mcpb` → `dist-mcpb/winfs-0.10.2.mcpb`, drag-install в Claude Desktop. См. §AD + инвариант #45.
 - **Plugin mechanism.** Если возникнет потребность в domain helpers — добавлять `plugins/` директорию или продолжать через `run_python` композицию?
 - **Telemetry.** Нужна ли opt-in anonymous metric collection (как DC) для diagnostics? Скорее нет — privacy-first.
 - **Auto-update.** Через npm registry или GitHub releases?
@@ -1684,3 +1699,48 @@ the often-broken System32 OpenSSH), then System32, then PATH.
 `transport_log.ts` (v0.10.0, opt-in `WINFS_TRANSPORT_LOG`), `config_watch.ts`
 (v0.10.0, allowedRoots hot-reload), `ssh_resolver.ts` (v0.10.1). Versions
 0.9.2 → 0.10.0 → 0.10.1.
+
+### 2026-06-03 — v0.10.2: §AD MCPB packaging
+
+v0.10.2 — упаковочная волна. **Новых инструментов нет** (surface заморожен на 39
+с v0.8). Содержание волны: MCPB-упаковка, production README rewrite, §7 приведён
+к фактической поставке. (Полный eval suite и сам v1.0.0-release — отдельная
+будущая волна; см. §7 и §10.)
+
+**§AD.1. MCPB как дополнительный способ установки (не замена).** Ручной путь
+(`--config <path>` либо `%LOCALAPPDATA%\mcp-winfs\config.json`) сохранён без
+изменений. MCPB добавляет one-click drag-install в Claude Desktop:
+
+- `mcpb/manifest.json` — manifest v0.4. `server.mcp_config` запускает не сам
+  сервер, а **shim** `mcpb/launch.mjs`. `user_config` поля: `allowedRoots`
+  (directory, multiple, required), `execExtraPathDirs`, `sshExePath`,
+  `powershellExePath`, `pythonHome`, `unrestrictedFilesystem` (bool, default
+  false), `unrestrictedFilesystemConfirm` (string).
+- `mcpb/launch.mjs` — массивы (`allowedRoots`, `execExtraPathDirs`) приходят
+  argv-expansion'ом (`--roots …`, `--extra-path-dirs …`), скаляры — через env;
+  shim защитно отбрасывает неподставленные `${…}` плейсхолдеры, накладывает
+  значения на baseline `configs/default.json`, атомарно (temp+fsync+rename)
+  пишет **выделенный** `%LOCALAPPDATA%\mcp-winfs\mcpb-config.json` (никогда не
+  трогает ручной `config.json`) и передаёт серверу через `--config`, импортируя
+  `dist/index.js` в том же процессе.
+- Сборка: `npm run mcpb` (`scripts/build-mcpb.mjs`) — компиляция, staging
+  `dist` + production-only `node_modules` + shim + baseline, синк версии из
+  `package.json` в manifest, `mcpb validate`, `mcpb pack` →
+  `dist-mcpb/winfs-0.10.2.mcpb`.
+- Проверка: `scripts/smoke/mcpb-smoke.mjs` распаковывает реальный `.mcpb` и
+  гоняет launcher по stdio как Claude Desktop (9/9).
+
+**Инвариант #45 — MCPB user_config маппится в runtime config БЕЗ обхода
+enforcement.** В MCPB-манифесте нет блока разрешений и нет sandbox; всю защиту
+несут tool-handlers сервера. Поэтому: (a) `allowedRoots` из Configure UI
+проходит ровно ту же realpath→prefix проверку, что и из ручного конфига
+(инвариант allowed-roots не ослаблен); (b) shim **не синтезирует**
+magic-confirm — `unrestrictedFilesystem: true` без точной строки
+`unrestrictedFilesystemConfirm = "I-UNDERSTAND-THE-RISK"` приводит к отказу
+старта в `loadConfig` (инвариант #28), как и при ручном конфиге; (c) shim пишет
+только ключи, принимаемые строгой Zod-схемой (`.strict()`) — никакого
+расширения поверхности конфигурации через упаковку.
+
+**Wave summary.** Spec invariant set grew #44 → #45 (+1). Новых модулей в `src/`
+нет (упаковка вне рантайма: `mcpb/`, `scripts/build-mcpb.mjs`,
+`scripts/smoke/mcpb-smoke.mjs`). Версия 0.10.1 → 0.10.2.

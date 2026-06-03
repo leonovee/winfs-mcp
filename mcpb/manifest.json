@@ -1,0 +1,133 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "winfs-mcp",
+  "display_name": "winfs — Windows filesystem & exec MCP",
+  "version": "0.10.2",
+  "description": "Secure Windows filesystem, git, exec and process-control MCP server with allowed-roots enforcement, atomic writes, hard timeouts and an audit log.",
+  "long_description": "winfs is a local MCP server for Windows 10/11. It exposes read/write/search/edit filesystem tools, read-only git, sandboxed command/python/pytest execution, persistent process sessions, SSRF-guarded fetch_url and more — all bounded by an allowed-roots whitelist, atomic temp+fsync+rename writes, hard-bounded timeouts, a shell blocklist and a redacting audit log. Configure the directories winfs may touch in the fields below; everything outside them is refused with EPERM_ROOT unless you explicitly opt into unrestricted mode.",
+  "author": {
+    "name": "Vladimir Leonov",
+    "email": "vladimir@leonov.ee",
+    "url": "https://github.com/leonovee"
+  },
+  "homepage": "https://github.com/leonovee/winfs-mcp",
+  "documentation": "https://github.com/leonovee/winfs-mcp#readme",
+  "support": "https://github.com/leonovee/winfs-mcp/issues",
+  "license": "MIT",
+  "keywords": ["filesystem", "windows", "git", "exec", "process", "mcp", "winfs"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/launch.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/launch.mjs",
+        "--roots",
+        "${user_config.allowedRoots}",
+        "--extra-path-dirs",
+        "${user_config.execExtraPathDirs}"
+      ],
+      "env": {
+        "WINFS_SSH_EXE_PATH": "${user_config.sshExePath}",
+        "WINFS_POWERSHELL_EXE_PATH": "${user_config.powershellExePath}",
+        "WINFS_PYTHON_HOME": "${user_config.pythonHome}",
+        "WINFS_UNRESTRICTED": "${user_config.unrestrictedFilesystem}",
+        "WINFS_UNRESTRICTED_CONFIRM": "${user_config.unrestrictedFilesystemConfirm}"
+      }
+    }
+  },
+  "user_config": {
+    "allowedRoots": {
+      "type": "directory",
+      "title": "Allowed directories",
+      "description": "Directories winfs is permitted to read and write. Everything outside these roots is refused. You can add several.",
+      "multiple": true,
+      "required": true,
+      "default": ["${HOME}/Documents"]
+    },
+    "execExtraPathDirs": {
+      "type": "directory",
+      "title": "Extra PATH directories (optional)",
+      "description": "Absolute directories appended to the sandboxed PATH used by execute_command — for portable Git, MSYS2, chocolatey shims and other non-standard tool installs. Leave empty if unsure.",
+      "multiple": true,
+      "required": false
+    },
+    "sshExePath": {
+      "type": "file",
+      "title": "SSH executable (optional)",
+      "description": "Path to ssh.exe for the ssh_exec tool. Leave empty to auto-detect (Git-bundled ssh → System32 OpenSSH → PATH).",
+      "required": false
+    },
+    "powershellExePath": {
+      "type": "file",
+      "title": "PowerShell executable (optional)",
+      "description": "Path to pwsh.exe or powershell.exe. Leave empty to auto-detect (pwsh 7+ on PATH, else Windows PowerShell 5.1).",
+      "required": false
+    },
+    "pythonHome": {
+      "type": "directory",
+      "title": "Python home (optional)",
+      "description": "Directory containing python.exe, used by run_python and run_pytest. Leave empty to use Python from PATH.",
+      "required": false
+    },
+    "unrestrictedFilesystem": {
+      "type": "boolean",
+      "title": "⚠ Unrestricted filesystem mode — DANGEROUS",
+      "description": "DANGER: disables the allowed-roots boundary, letting winfs touch ANY path your account can. Only enable if you fully understand the risk. Requires the confirm phrase below — leave OFF for normal use.",
+      "default": false,
+      "required": false
+    },
+    "unrestrictedFilesystemConfirm": {
+      "type": "string",
+      "title": "Unrestricted confirm phrase",
+      "description": "Required ONLY if you turned on unrestricted mode above. Type exactly: I-UNDERSTAND-THE-RISK — otherwise the server will refuse to start.",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["win32"],
+    "runtimes": { "node": ">=18" }
+  },
+  "tools": [
+    { "name": "read", "description": "Read a UTF-8 text file within an allowed root." },
+    { "name": "write", "description": "Atomically write a UTF-8 text file (temp + fsync + rename)." },
+    { "name": "append", "description": "Append UTF-8 text to a file." },
+    { "name": "list", "description": "List a directory's entries with type and size." },
+    { "name": "stat", "description": "Stat a file or directory (size, mtime, type)." },
+    { "name": "mkdir", "description": "Create a directory, recursively." },
+    { "name": "move", "description": "Move or rename a file or directory." },
+    { "name": "copy", "description": "Copy a file or directory." },
+    { "name": "read_multiple_files", "description": "Batch-read several files in one call." },
+    { "name": "list_allowed_directories", "description": "List the effective allowed roots (config ∪ MCP client roots)." },
+    { "name": "glob", "description": "Match files by glob pattern within allowed roots." },
+    { "name": "read_json", "description": "Read and parse a JSON file." },
+    { "name": "grep", "description": "Search file contents by regex with context and pagination." },
+    { "name": "audit_tail", "description": "Tail the server's redacting audit log." },
+    { "name": "read_section", "description": "Read a specific line range from a file." },
+    { "name": "diff_files", "description": "Produce a unified diff between two files." },
+    { "name": "read_since", "description": "Read bytes appended to a file since a known offset." },
+    { "name": "edit_file", "description": "Find/replace edit with strict uniqueness check and optional diff preview." },
+    { "name": "git_status", "description": "git status for a repo within an allowed root." },
+    { "name": "git_log", "description": "Read the git commit log." },
+    { "name": "git_show", "description": "Show a git commit or object." },
+    { "name": "git_diff", "description": "Diff the working tree or commits." },
+    { "name": "git_blame", "description": "Line-by-line git blame." },
+    { "name": "execute_command", "description": "Run a shell command with hard timeout, sanitized env and a destructive-command blocklist." },
+    { "name": "run_python", "description": "Run a Python script or snippet." },
+    { "name": "run_pytest", "description": "Run pytest and capture results." },
+    { "name": "find_command", "description": "Locate an executable on PATH." },
+    { "name": "check_env", "description": "Report selected environment diagnostics." },
+    { "name": "fetch_url", "description": "HTTP GET with two-layer SSRF defense and size/time caps." },
+    { "name": "write_chunk", "description": "Byte-offset chunked write for large files." },
+    { "name": "list_path_dirs", "description": "List the directories on PATH." },
+    { "name": "write_json", "description": "Atomically write a JSON file." },
+    { "name": "ssh_exec", "description": "Run a command on a remote host over SSH." },
+    { "name": "start_process", "description": "Start a persistent background process session." },
+    { "name": "interact", "description": "Send input to and read output from a process session." },
+    { "name": "list_process", "description": "List active process sessions." },
+    { "name": "kill_process", "description": "Terminate a process session." },
+    { "name": "directory_tree", "description": "Recursive directory tree with a depth cap." },
+    { "name": "read_media_file", "description": "Read an image or media file as base64 with its MIME type." }
+  ]
+}
