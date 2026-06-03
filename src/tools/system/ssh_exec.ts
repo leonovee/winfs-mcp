@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedConfig } from "../../core/config.js";
 import { runTool } from "../../core/tool_wrapper.js";
 import { spawnSubprocess } from "../../core/exec_safety.js";
+import { resolveSshBin } from "../../core/ssh_resolver.js";
 import { buildError, ok, type Result } from "../../core/errors.js";
 import type { ToolContext } from "../../core/tool_context.js";
 
@@ -33,7 +34,7 @@ const InputShape = {
     .max(MAX_TIMEOUT_S)
     .optional()
     .describe(
-      `Per-call timeout in seconds. Default ${DEFAULT_TIMEOUT_S}, max ${MAX_TIMEOUT_S}. Effective max is also clamped by config.maxTimeoutMs (default 60_000ms — raise it in config if you need longer ssh sessions).`,
+      `Per-call timeout in seconds. Default ${DEFAULT_TIMEOUT_S}, max ${MAX_TIMEOUT_S} (the full ${MAX_TIMEOUT_S}s is honored — no longer clamped to config.maxTimeoutMs).`,
     ),
 } as const;
 
@@ -88,6 +89,7 @@ type ValidateResult =
 async function validateHost(
   host: string,
   config: ResolvedConfig,
+  sshBin: string,
   signal?: AbortSignal,
 ): Promise<ValidateResult> {
   if (validatedHostCache.has(host)) return { ok: true };
@@ -105,7 +107,7 @@ async function validateHost(
   }
 
   const result = await spawnSubprocess({
-    bin: config.sshExePath,
+    bin: sshBin,
     args: ["-G", host],
     cwd: config.resolvedAllowedRoots[0] ?? process.cwd(),
     deadlineMs: SSH_G_TIMEOUT_MS,
@@ -165,17 +167,21 @@ export async function sshExecImpl(
   config: ResolvedConfig,
   signal?: AbortSignal,
 ): Promise<Result<SshExecResult>> {
+  // Resolve the ssh binary: explicit config.sshExePath (strict), else
+  // auto-detect (Git-bundled preferred over the often-broken System32 one).
+  const sshBin = resolveSshBin(config);
+
   // Step 1: ssh.exe existence check. Fail fast with ESSHNOTFOUND so the
   // caller can install OpenSSH or fix sshExePath without doing remote work.
-  if (!(await sshExeExists(config.sshExePath))) {
-    return buildError("ESSHNOTFOUND", "ssh.exe not found at configured path", {
-      details: { sshExePath: config.sshExePath },
-      hint: "Install OpenSSH client (Windows Settings → Apps → Optional features → OpenSSH Client) or set config.sshExePath.",
+  if (!(await sshExeExists(sshBin))) {
+    return buildError("ESSHNOTFOUND", "ssh.exe not found at resolved path", {
+      details: { sshExePath: sshBin, configured: config.sshExePath ?? "(auto-detect)" },
+      hint: "Install OpenSSH client (Windows Settings → Apps → Optional features → OpenSSH Client), install Git for Windows (bundles ssh), or set config.sshExePath.",
     });
   }
 
   // Step 2: host whitelist check via `ssh -G`.
-  const valid = await validateHost(args.host, config, signal);
+  const valid = await validateHost(args.host, config, sshBin, signal);
   if (!valid.ok) {
     return buildError("EHOST_UNKNOWN", `host alias not resolvable: ${valid.reason}`, {
       details: { host: args.host, ...(valid.details ?? {}) },
@@ -187,7 +193,7 @@ export async function sshExecImpl(
 
   // Step 3: spawn ssh.exe directly — no shell, no PowerShell.
   const spawnResult = await spawnSubprocess({
-    bin: config.sshExePath,
+    bin: sshBin,
     args: [args.host, args.command],
     cwd: config.resolvedAllowedRoots[0] ?? process.cwd(),
     deadlineMs: timeoutS * 1000,
@@ -247,8 +253,10 @@ issues that make \`execute_command\` unreliable for ssh on this Windows host.
 strings are rejected; the user's ssh config is the only whitelist. Validated
 aliases are cached for the server lifetime.
 
-**Binary:** absolute path resolved from \`config.sshExePath\` (default
-\`C:\\Windows\\System32\\OpenSSH\\ssh.exe\`). Missing binary → \`ESSHNOTFOUND\`.
+**Binary:** \`config.sshExePath\` when set (used strictly); otherwise
+auto-detected — Git-bundled \`C:\\Program Files\\Git\\usr\\bin\\ssh.exe\`
+(preferred, since the System32 OpenSSH client exits 255 on some hosts), then
+\`C:\\Windows\\System32\\OpenSSH\\ssh.exe\`, then PATH. Missing → \`ESSHNOTFOUND\`.
 
 **Output cap:** 4 KB per stream; excess sets \`truncated_stdout\` /
 \`truncated_stderr\`. Process tree killed on timeout.
@@ -260,8 +268,7 @@ Pageant / agent state from interactive sessions.
 Args:
   - host (string): ssh config Host alias
   - command (string): remote command
-  - timeout_seconds (number, optional): default 30, max 300 (also clamped by
-    config.maxTimeoutMs — raise the config value if you need longer sessions)
+  - timeout_seconds (number, optional): default 30, max 300 (full 300s honored)
 
 Returns: { host, stdout, stderr, exit_code, timed_out, truncated_stdout?, truncated_stderr?, duration_ms }
 
@@ -287,8 +294,11 @@ exit_code, timed_out, duration_ms — full command is NEVER persisted.`,
         {
           tool: "ssh_exec",
           config,
-          // ssh sessions can exceed the default 10s; bound by max 300s.
+          // ssh sessions can exceed the default 10s; bound by max 300s. The
+          // maxTimeoutMs override raises runTool's outer ceiling so the full
+          // 300s is honored (previously clamped to config.maxTimeoutMs=60s).
           timeoutMs: ((args as Input).timeout_seconds ?? DEFAULT_TIMEOUT_S) * 1000,
+          maxTimeoutMs: MAX_TIMEOUT_S * 1000,
           auditExtras: (result) => {
             const a = args as Input;
             const base: Record<string, unknown> = {

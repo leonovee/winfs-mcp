@@ -44,7 +44,10 @@ const CONFIG_SCHEMA = z
     // Windows 10/11 (System32\OpenSSH\ssh.exe). Resolved once at startup;
     // if the path doesn't exist, the tool still registers but every call
     // returns ESSHNOTFOUND.
-    sshExePath: z.string().default("C:\\Windows\\System32\\OpenSSH\\ssh.exe"),
+    // Item 6: now OPTIONAL (was defaulted to System32 OpenSSH, which exits 255
+    // on some hosts). When set, ssh_exec uses it strictly. When UNSET,
+    // resolveSshBin auto-detects: Git-bundled ssh (preferred) → System32 → PATH.
+    sshExePath: z.string().optional(),
     // v0.9.1 Phase B: explicit PowerShell binary override. If unset,
     // resolvePowershellBin probes for pwsh.exe (PS 7+) on PATH and
     // falls back to powershell.exe (PS 5.1). Set this to pin a specific
