@@ -95,8 +95,8 @@ async function validateHost(
   if (validatedHostCache.has(host)) return { ok: true };
 
   // Reject raw `user@host` strings up front. SSH config Host aliases
-  // conventionally don't contain `@`; the alias-only convention is what makes
-  // the ~/.ssh/config whitelist meaningful.
+  // conventionally don't contain `@`; rejecting `@` keeps the input in the
+  // alias form `ssh -G` resolves against ~/.ssh/config.
   if (host.includes("@")) {
     return {
       ok: false,
@@ -137,17 +137,13 @@ async function validateHost(
       details: { exit_code: result.exitCode, stderr_preview: result.stderr.slice(0, 256) },
     };
   }
-  // `ssh -G <host>` prints the resolved config as `keyword value` lines, one
-  // per line. We require a `hostname <something-non-empty>` line as proof the
-  // alias actually resolved. ssh prints `hostname <host>` even when the alias
-  // is unknown (falling back to the literal name), so we additionally require
-  // that some Host stanza matched — easiest tell is that one of the `user`,
-  // `port`, or `identityfile` lines is non-default. But the simplest, robust
-  // discriminator is: alias must appear as a Host entry. We approximate that
-  // by requiring `hostname` to be present (which it always is from ssh -G)
-  // AND requiring it to be non-empty. That's enough to verify ssh.exe ran
-  // successfully and the alias is at least syntactically valid. Stricter
-  // alias-in-config-file validation lives in v0.7+ if smoke surfaces gaps.
+  // `ssh -G <host>` prints the resolved config as `keyword value` lines. We
+  // require a non-empty `hostname` line as proof ssh.exe ran and the alias is
+  // syntactically resolvable. IMPORTANT: ssh prints `hostname <literal>` even
+  // for an UNKNOWN alias (it falls back to the literal name), so this check
+  // does NOT prove the alias is defined in ~/.ssh/config — it is resolvability
+  // validation, NOT a security allowlist. The enforced allowlist is
+  // config.allowedSshHosts (checked in sshExecImpl before any spawn).
   const hostnameLine = result.stdout
     .split(/\r?\n/)
     .find((line) => /^hostname\s+\S+/i.test(line));
@@ -167,6 +163,22 @@ export async function sshExecImpl(
   config: ResolvedConfig,
   signal?: AbortSignal,
 ): Promise<Result<SshExecResult>> {
+  // GPT-review #1 — enforced host allowlist. When config.allowedSshHosts is set,
+  // `host` MUST be an exact member, checked BEFORE any ssh.exe spawn. This is
+  // the real security control. The `ssh -G` step below only validates that the
+  // alias is syntactically resolvable (ssh prints `hostname <literal>` even for
+  // unknown aliases), so it is NOT a whitelist — never call it one. An empty
+  // array is a valid strictest config that blocks every host.
+  if (
+    config.allowedSshHosts !== undefined &&
+    !config.allowedSshHosts.includes(args.host)
+  ) {
+    return buildError("EHOST_UNKNOWN", "host is not in the config.allowedSshHosts allowlist", {
+      details: { host: args.host, allowed_count: config.allowedSshHosts.length },
+      hint: "Add this Host alias to config.allowedSshHosts, or remove allowedSshHosts to fall back to `ssh -G` resolvability validation.",
+    });
+  }
+
   // Resolve the ssh binary: explicit config.sshExePath (strict), else
   // auto-detect (Git-bundled preferred over the often-broken System32 one).
   const sshBin = resolveSshBin(config);
@@ -180,7 +192,8 @@ export async function sshExecImpl(
     });
   }
 
-  // Step 2: host whitelist check via `ssh -G`.
+  // Step 2: host resolvability validation via `ssh -G` (NOT an allowlist; the
+  // enforced allowlist is config.allowedSshHosts, checked above).
   const valid = await validateHost(args.host, config, sshBin, signal);
   if (!valid.ok) {
     return buildError("EHOST_UNKNOWN", `host alias not resolvable: ${valid.reason}`, {
@@ -248,10 +261,14 @@ through \`child_process.spawn\` — no shell, no PowerShell wrapper. Sidesteps
 the PATH-sanitization, PowerShell document-in-pipeline, and silent-stdout
 issues that make \`execute_command\` unreliable for ssh on this Windows host.
 
-**Host whitelist:** \`host\` MUST be a Host alias resolvable via \`ssh -G\` against
-\`~/.ssh/config\` (Windows: \`%USERPROFILE%\\.ssh\\config\`). Raw \`user@host\`
-strings are rejected; the user's ssh config is the only whitelist. Validated
-aliases are cached for the server lifetime.
+**Host allowlist:** set \`config.allowedSshHosts\` to an array of Host aliases to
+ENFORCE an allowlist — any \`host\` not in it is rejected with EHOST_UNKNOWN
+before ssh runs. When \`allowedSshHosts\` is unset, \`host\` is only validated for
+RESOLVABILITY via \`ssh -G\` against \`~/.ssh/config\` (Windows:
+\`%USERPROFILE%\\.ssh\\config\`): that proves the alias resolves, NOT that it is a
+configured Host (ssh echoes \`hostname <literal>\` even for unknown aliases), so
+on its own it is NOT a security boundary. Raw \`user@host\` strings are always
+rejected. Validated aliases are cached for the server lifetime.
 
 **Binary:** \`config.sshExePath\` when set (used strictly); otherwise
 auto-detected — Git-bundled \`C:\\Program Files\\Git\\usr\\bin\\ssh.exe\`
@@ -274,7 +291,7 @@ Returns: { host, stdout, stderr, exit_code, timed_out, truncated_stdout?, trunca
 
 Errors:
   - ESSHNOTFOUND: sshExePath does not exist on disk
-  - EHOST_UNKNOWN: host not resolvable via \`ssh -G\` (or raw \`user@host\` form rejected)
+  - EHOST_UNKNOWN: host not in config.allowedSshHosts (when set), not resolvable via \`ssh -G\`, or raw \`user@host\` form rejected
   - ETIMEDOUT: exceeded timeout_seconds
   - EIO: ssh.exe failed to start (mirror v0.6 exec_safety spawn-error fix)
 

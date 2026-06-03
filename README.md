@@ -249,7 +249,7 @@ Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 
 | Tool             | Read-only | What it does                                                                |
 |------------------|-----------|-----------------------------------------------------------------------------|
-| `ssh_exec`       | no        | First-class SSH. Spawns `ssh.exe` directly via `child_process.spawn` — no shell, no PowerShell wrapper. `host` must be a Host alias resolvable via `ssh -G` against `~/.ssh/config`; raw `user@host` rejected. Sidesteps three stacked failures that block ssh through `execute_command` (PATH sanitization, PS document-in-pipeline, silent-stdout bug #2). 4 KB per-stream output cap; `timeout_seconds` default 30 / max 300. Errors: `ESSHNOTFOUND`, `EHOST_UNKNOWN`, `ETIMEDOUT`, `EIO`. See spec amendment §X. |
+| `ssh_exec`       | no        | First-class SSH. Spawns `ssh.exe` directly via `child_process.spawn` — no shell, no PowerShell wrapper. **Host control:** set `config.allowedSshHosts` to enforce an allowlist (non-member → `EHOST_UNKNOWN` before ssh runs); when unset, `host` is only validated for *resolvability* via `ssh -G` against `~/.ssh/config` (proves the alias resolves, not that it's a configured Host — not a security boundary). Raw `user@host` always rejected. Sidesteps three stacked failures that block ssh through `execute_command` (PATH sanitization, PS document-in-pipeline, silent-stdout bug #2). 4 KB per-stream output cap; `timeout_seconds` default 30 / max 300. Errors: `ESSHNOTFOUND`, `EHOST_UNKNOWN`, `ETIMEDOUT`, `EIO`. See spec amendment §X. |
 | `list_path_dirs` | yes       | Returns the sanitized PATH array that `execute_command` / `find_command` / `run_python` / `run_pytest` / `ssh_exec` inherit. Use it to debug "why is binary X invisible" — if a directory isn't in this list, subprocesses can't see binaries in it. No input args. |
 | `write_json`     | no        | Atomic JSON write, symmetric to v0.3 `read_json`. `path` must end in `.json` (case-insensitive, validated on both supplied path and realpath). `value: unknown` is `JSON.stringify`-d (with `indent` 0..10, default 2); trailing newline appended; atomic temp + fsync + rename. `overwrite: false` by default (safer than v0.1 `write`). New error: `EEXT_NOT_JSON`. |
 
@@ -312,8 +312,9 @@ problems stack: (1) the sanitized PATH does not include
 in pipelines with `Cannot run a document in the middle of a pipeline`
 (file-association quirk); (3) even direct invocation produces empty stdout
 with exit 0 — known bug #2 in `CLAUDE.md`. The v0.7 `ssh_exec` tool replaces
-this path by spawning `ssh.exe` via `child_process.spawn` directly, with hosts
-whitelisted from `~/.ssh/config`. For v0.6.x users: invoke ssh from outside
+this path by spawning `ssh.exe` via `child_process.spawn` directly. Host access
+is gated by the optional `config.allowedSshHosts` allowlist (see below) plus
+`ssh -G` resolvability validation. For v0.6.x users: invoke ssh from outside
 the MCP server.
 
 ### Process registry is in-memory only (v0.7 wave 2b)
@@ -450,6 +451,26 @@ Note that `configs/local.json` is gitignored; create or edit it as
 needed for your machine. An explicitly-set `sshExePath` is used strictly:
 `ssh_exec` returns `ESSHNOTFOUND` if it does not exist on disk, so a typo is
 caught at the first call rather than silently falling back to auto-detect.
+
+#### `allowedSshHosts` — enforced ssh_exec host allowlist (optional)
+
+`ssh_exec` always validates that `host` is *resolvable* via `ssh -G`, but that
+is **not** a security boundary: `ssh -G` echoes `hostname <literal>` even for an
+alias that has no `Host` entry, so it proves the name resolves, not that you
+configured it. To actually restrict which hosts `ssh_exec` may reach, set
+`allowedSshHosts` to an array of exact Host aliases — anything not in the list
+is refused with `EHOST_UNKNOWN` **before** ssh is spawned:
+
+```json
+{
+  "allowedRoots": ["C:\\Users\\me\\src"],
+  "allowedSshHosts": ["prod-web", "staging-db"]
+}
+```
+
+Unset (the default) keeps the resolvability-only behavior. An empty array
+(`[]`) is the strictest setting — it blocks every host. Matching is exact and
+case-sensitive (as `ssh -G` itself is).
 
 #### `execExtraPathDirs` — extra PATH dirs for non-standard tool installs
 

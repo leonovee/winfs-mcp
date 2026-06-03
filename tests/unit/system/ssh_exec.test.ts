@@ -229,6 +229,63 @@ describe("tools/system/ssh_exec", () => {
     expect(res.value.stdout.length).toBe(4096);
   });
 
+  it("EHOST_UNKNOWN when config.allowedSshHosts is set and host is not a member (enforced before any spawn)", async () => {
+    const fakeSsh = await makeFakeSshExe(root);
+    config = { ...config, sshExePath: fakeSsh, allowedSshHosts: ["prod", "staging"] };
+    // Mocks set up so that WITHOUT the allowlist gate this call would succeed
+    // end-to-end (ssh -G validation + exec). WITH the gate it must short-circuit
+    // to EHOST_UNKNOWN before spawning anything.
+    mockedSpawn.mockResolvedValueOnce(
+      makeSpawnResult({ exitCode: 0, stdout: "hostname evil.example.com\n" }),
+    );
+    mockedSpawn.mockResolvedValueOnce(
+      makeSpawnResult({ exitCode: 0, stdout: "pwned\n", durationMs: 1 }),
+    );
+    const res = await sshExecImpl(
+      { host: "evil", command: "ls", timeout_seconds: 10 },
+      config,
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("expected error");
+    expect(res.error.code).toBe("EHOST_UNKNOWN");
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it("allowlisted host still passes ssh -G validation, then execs (allowlist is additive, not a bypass)", async () => {
+    const fakeSsh = await makeFakeSshExe(root);
+    config = { ...config, sshExePath: fakeSsh, allowedSshHosts: ["prod"] };
+    mockedSpawn.mockResolvedValueOnce(
+      makeSpawnResult({ exitCode: 0, stdout: "hostname prod.example.com\n" }),
+    );
+    mockedSpawn.mockResolvedValueOnce(
+      makeSpawnResult({ exitCode: 0, stdout: "ok\n", durationMs: 5 }),
+    );
+    const res = await sshExecImpl(
+      { host: "prod", command: "uptime", timeout_seconds: 10 },
+      config,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error("expected ok");
+    expect(res.value.stdout).toBe("ok\n");
+    // Membership passed → validation (ssh -G) + exec = 2 spawns.
+    expect(mockedSpawn).toHaveBeenCalledTimes(2);
+    expect(mockedSpawn.mock.calls[0]![0].args).toEqual(["-G", "prod"]);
+    expect(mockedSpawn.mock.calls[1]![0].args).toEqual(["prod", "uptime"]);
+  });
+
+  it("empty allowedSshHosts array blocks every host (strictest config)", async () => {
+    const fakeSsh = await makeFakeSshExe(root);
+    config = { ...config, sshExePath: fakeSsh, allowedSshHosts: [] };
+    const res = await sshExecImpl(
+      { host: "anything", command: "ls", timeout_seconds: 10 },
+      config,
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("expected error");
+    expect(res.error.code).toBe("EHOST_UNKNOWN");
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
   it("host validation cached for repeated calls (only one ssh -G per alias)", async () => {
     const fakeSsh = await makeFakeSshExe(root);
     config = { ...config, sshExePath: fakeSsh };

@@ -53,6 +53,15 @@ const CONFIG_SCHEMA = z
     // on some hosts). When set, ssh_exec uses it strictly. When UNSET,
     // resolveSshBin auto-detects: Git-bundled ssh (preferred) → System32 → PATH.
     sshExePath: z.string().optional(),
+    // GPT-review #1: explicit ssh_exec host allowlist. When SET, `host` MUST be
+    // an exact member, else EHOST_UNKNOWN — enforced BEFORE any ssh.exe spawn.
+    // This is the real, operator-controlled security allowlist. When UNSET
+    // (undefined), ssh_exec falls back to the `ssh -G` check, which only
+    // validates that the alias is syntactically RESOLVABLE — NOT that it appears
+    // in ~/.ssh/config — and is therefore NOT a whitelist. Default unset keeps
+    // current behavior; setting it can only NARROW what ssh_exec accepts (safer,
+    // never looser). Exact-match (ssh -G is case-sensitive).
+    allowedSshHosts: z.array(z.string()).optional(),
     // v0.9.1 Phase B: explicit PowerShell binary override. If unset,
     // resolvePowershellBin probes for pwsh.exe (PS 7+) on PATH and
     // falls back to powershell.exe (PS 5.1). Set this to pin a specific

@@ -1133,7 +1133,7 @@ New tool under `src/tools/system/ssh_exec.ts`. First-class SSH remote execution 
 
 **Input schema:**
 
-- `host: string` (1..256 chars). MUST be a Host alias resolvable via `ssh -G <host>` against `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`). Strings containing `@` are rejected up-front as raw `user@host` form.
+- `host: string` (1..256 chars). When `config.allowedSshHosts` is set, MUST be an exact member (the enforced allowlist). Always validated for resolvability via `ssh -G <host>` against `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`) — resolvability is NOT membership (see invariant #35). Strings containing `@` are rejected up-front as raw `user@host` form.
 - `command: string` (1..8 KB). Verbatim remote command; passed as a single argv element to ssh.
 - `timeout_seconds?: number` (1..300, default 30). Effective max is also clamped by `config.maxTimeoutMs` via the standard `runTool` wrapper; raise the config knob if longer ssh sessions are required.
 
@@ -1153,19 +1153,19 @@ New tool under `src/tools/system/ssh_exec.ts`. First-class SSH remote execution 
 **Errors.**
 
 - `ESSHNOTFOUND` — `sshExePath` does not exist on disk (new error code; spec §5 catalog entry below).
-- `EHOST_UNKNOWN` — host validation failed: raw `user@host` form, `ssh -G` non-zero exit, validation timeout, or missing `hostname` line in `ssh -G` stdout. Details carry the exact reason (new error code).
+- `EHOST_UNKNOWN` — host rejected: not in `config.allowedSshHosts` (when set), raw `user@host` form, `ssh -G` non-zero exit, validation timeout, or missing `hostname` line in `ssh -G` stdout. Details carry the exact reason (new error code).
 - `ETIMEDOUT` — child exceeded `timeout_seconds`. Details include `partial_stdout` / `partial_stderr` (each capped at 1 KB) for diagnostic value.
 - `EIO` — child failed to start asynchronously (`spawn` succeeded synchronously but the OS rejected the process). Mirror of the v0.6 §U `exec_safety` fix — `spawnFailed: true` flag in details, plus the OS error code in `errno`.
 
-**Mode behavior.** Allowed in both `strict` and `unrestricted` server modes. ssh_exec is deliberate egress gated by the user's `~/.ssh/config`, not by `allowedRoots`. The mutation-tool audit-record carries `mode` per invariant #30.
+**Mode behavior.** Allowed in both `strict` and `unrestricted` server modes. ssh_exec is deliberate network egress, independent of `allowedRoots`; gate it with `config.allowedSshHosts` (the enforced host allowlist — invariant #35) rather than relying on `~/.ssh/config` resolvability alone. The mutation-tool audit-record carries `mode` per invariant #30.
 
 **Audit redaction.** `command` is in `SENSITIVE_ARG_KEYS` — sanitizer replaces it with `<redacted: N bytes>`. `auditExtras` adds: `host` (full), `command_prefix` (first 256 chars), `command_length` (full), `truncated_at: 256`, plus on success `exit_code`, `timed_out`, `duration_ms`. Full command is NEVER persisted.
 
 **Documented prerequisite (not enforced).** Working ssh-agent or passphrase-less key. Non-interactive subprocesses on Windows don't inherit Pageant / agent state from interactive sessions; if your key has a passphrase, ssh_exec will hang waiting for stdin (which is `ignore`d) until the deadline.
 
-**Configuration.** New optional config field `sshExePath: string` (Zod schema, default `"C:\\Windows\\System32\\OpenSSH\\ssh.exe"`). No magic-confirm gate — ssh_exec's security boundary is the user's ssh config, not the binary path.
+**Configuration.** `sshExePath?: string` (optional; since v0.10.1 auto-detected when unset — Git-bundled ssh preferred over System32, then PATH). `allowedSshHosts?: string[]` (optional; when set, the enforced host allowlist — invariant #35; an empty array blocks every host). No magic-confirm gate.
 
-**Invariant #35 — host whitelist via ssh -G is the ONLY validation.** No regex bypass, no "trusted hosts" config flag, no `user@host` raw-string acceptance. Validated hosts are cached for the server lifetime to avoid `ssh -G` overhead on every call; cache is process-local and cleared on restart.
+**Invariant #35 — ssh_exec host validation is two-layer; `ssh -G` is NOT a whitelist.** (1) When `config.allowedSshHosts` is set, `host` MUST be an exact member — the enforced, operator-controlled allowlist, checked BEFORE any ssh.exe spawn; a non-member returns `EHOST_UNKNOWN`, and an empty array blocks every host. (2) `ssh -G <host>` resolvability validation always runs (`exitCode === 0` AND a non-empty `hostname` line). This proves the alias is syntactically resolvable, NOT that it is defined in `~/.ssh/config` — ssh echoes `hostname <literal>` even for an unknown alias — so on its own it is resolvability validation, NOT a security boundary. No regex bypass, no `user@host` raw-string acceptance. Validated hosts are cached for the server lifetime (process-local, cleared on restart). *(Corrected at v0.10.3: the original wording called the `ssh -G` check a "whitelist", which it never was; `allowedSshHosts` is the real allowlist added in the same patch.)*
 
 **§X.2. `list_path_dirs` tool contract.**
 
@@ -1216,7 +1216,7 @@ New tool under `src/tools/file/write_json.ts`. Atomic JSON write, symmetric to v
 | Code | Tool | Meaning |
 |---|---|---|
 | `ESSHNOTFOUND` | `ssh_exec` | `config.sshExePath` does not exist on disk. Install OpenSSH client or set the config field. |
-| `EHOST_UNKNOWN` | `ssh_exec` | `host` not resolvable via `ssh -G` (or raw `user@host` form rejected). Add a `Host` entry in `~/.ssh/config`. |
+| `EHOST_UNKNOWN` | `ssh_exec` | `host` not in `config.allowedSshHosts` (when set), not resolvable via `ssh -G`, or raw `user@host` form rejected. Set an allowlist and/or add a `Host` entry in `~/.ssh/config`. |
 | `EEXT_NOT_JSON` | `write_json` | Path does not end in `.json` (case-insensitive). Use `write` for non-JSON files. |
 
 **§X.5. `MUTATION_TOOLS` extension.**
