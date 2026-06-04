@@ -16,8 +16,7 @@
  *      reassigning the config field — this preserves the client-root union and
  *      the array identity the ~17 read sites depend on.
  */
-import { watch, type FSWatcher } from "node:fs";
-import * as path from "node:path";
+import { watchFile, unwatchFile, type Stats } from "node:fs";
 import { loadConfig } from "./config.js";
 
 /** Minimal surface of RootsResolver this module needs (keeps it testable). */
@@ -88,22 +87,30 @@ export interface ConfigWatchHandle {
  * Watch `configPath` for changes and invoke `onChange` (debounced) after each
  * write. Returns a handle to stop watching.
  *
- * We watch the PARENT DIRECTORY and filter on basename rather than watching the
- * file directly: atomic-replace writes (temp-file + rename — which winfs itself
- * uses, and many editors do) replace the inode and silently break a single-file
- * `fs.watch` on Windows. A directory watch survives the replace. The debounce
- * coalesces the rename+change burst editors emit.
+ * Implemented with `fs.watchFile` (stat-based POLLING), deliberately NOT the
+ * event-based `fs.watch`. On Windows under the newer Node 24.x bundled libuv,
+ * `fs.watch` (file OR directory) can trip a NATIVE libuv assertion in
+ * `src/win/fs-event.c` (`!_wcsnicmp(filename, dir, dirlen)`), which aborts the
+ * process — uncatchable from JS (it crashed the vitest fork pool in CI on
+ * Node 24). `fs.watchFile` polls `stat` on a timer and never touches
+ * `fs-event.c`, so it is immune.
+ *
+ * Polling also survives atomic-replace writes (temp-file + rename — which winfs
+ * itself and many editors use) for free: `watchFile` follows the PATH, not the
+ * inode, so the next poll stats the freshly-renamed file. We react only on an
+ * actual change (mtime / size / inode), and the debounce coalesces the
+ * rename+write burst. The interval (default 1 s) is fine for a single config
+ * file; tests pass a short interval.
  */
 export function watchConfigFile(
   configPath: string,
   onChange: () => void,
-  opts?: { debounceMs?: number },
+  opts?: { debounceMs?: number; intervalMs?: number },
 ): ConfigWatchHandle {
   const debounceMs = opts?.debounceMs ?? 250;
-  const dir = path.dirname(configPath);
-  const base = path.basename(configPath).toLowerCase();
+  const intervalMs = opts?.intervalMs ?? 1000;
   let timer: NodeJS.Timeout | undefined;
-  let watcher: FSWatcher | undefined;
+  let watching = false;
 
   const fire = (): void => {
     if (timer) clearTimeout(timer);
@@ -118,29 +125,41 @@ export function watchConfigFile(
     timer.unref?.();
   };
 
+  const listener = (curr: Stats, prev: Stats): void => {
+    // watchFile fires the listener each poll; react only on a real change —
+    // mtime/size for an in-place edit, or inode for an atomic-replace (and the
+    // zeroed-stat case when the file is removed, which flips mtime/ino too).
+    if (
+      curr.mtimeMs !== prev.mtimeMs ||
+      curr.size !== prev.size ||
+      curr.ino !== prev.ino
+    ) {
+      fire();
+    }
+  };
+
   try {
-    // persistent:false → the watcher never keeps the process alive on its own.
-    watcher = watch(dir, { persistent: false }, (_event, filename) => {
-      // filename can be null on some platforms — fire conservatively then.
-      if (filename == null || path.basename(filename.toString()).toLowerCase() === base) {
-        fire();
-      }
-    });
-    watcher.on("error", () => {
-      /* swallow — watching is best-effort; a broken watch must not crash us */
-    });
-  } catch {
-    // Directory not watchable (permissions / transient) — degrade to no-op.
-    watcher = undefined;
+    // persistent:false → the poll timer never keeps the process alive on its own.
+    watchFile(configPath, { persistent: false, interval: intervalMs }, listener);
+    watching = true;
+  } catch (err) {
+    // Path not watchable (permissions / transient). Degrade to hot-reload-OFF:
+    // the server keeps running on its current config; never crash on watch setup.
+    process.stderr.write(
+      `mcp-winfs config watcher disabled (hot-reload off): ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    watching = false;
   }
 
   return {
     close(): void {
       if (timer) clearTimeout(timer);
-      try {
-        watcher?.close();
-      } catch {
-        /* ignore */
+      if (watching) {
+        try {
+          unwatchFile(configPath, listener);
+        } catch {
+          /* ignore */
+        }
       }
     },
   };

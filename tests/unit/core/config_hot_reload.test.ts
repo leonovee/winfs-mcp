@@ -150,7 +150,9 @@ describe("core hot-reload (Phase G)", () => {
   it("watchConfigFile fires the debounced callback after the file changes", async () => {
     const p = await writeCfg({ allowedRoots: [extraRoot] });
     let fired = 0;
-    const handle = watchConfigFile(p, () => { fired++; }, { debounceMs: 40 });
+    // Short poll interval so the stat-based watcher reacts quickly in the test
+    // (production default is 1 s — fine for a single config file).
+    const handle = watchConfigFile(p, () => { fired++; }, { debounceMs: 40, intervalMs: 50 });
     try {
       // Modify the file a few times in a burst — debounce should coalesce.
       await fs.writeFile(p, JSON.stringify({ allowedRoots: [extraRoot, newRoot] }), "utf8");

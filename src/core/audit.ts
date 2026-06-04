@@ -162,6 +162,11 @@ async function rotateIfNeeded(logPath: string, maxBytes: number): Promise<void> 
  * not turn into tool failure.
  */
 export function appendAudit(config: ResolvedConfig, record: AuditRecord): void {
+  // Defensive: a config without a resolved audit-log path (e.g. a hand-built
+  // test fixture, or a future caller that forgets to resolve it) degrades to a
+  // clean no-op rather than spamming stderr with "path argument ... undefined".
+  // The production loadConfig always sets resolvedAuditLogPath.
+  if (!config.resolvedAuditLogPath) return;
   const line = JSON.stringify(record) + "\n";
   writeQueue = writeQueue.then(async () => {
     try {

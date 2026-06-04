@@ -41,13 +41,8 @@ jobs:
       - name: Build (tsc)
         run: npm run build
 
-      # CI-only retry (up to 2x) to absorb the documented Windows child-process
-      # timing nondeterminism in tests/unit/process/* (see CHANGELOG [0.9.1] /
-      # tests/helpers.ts rmdirWithRetry). A DETERMINISTIC failure still fails all
-      # attempts — retry only rescues genuine flakes. Local `npm test` stays
-      # strict (no retry) so flakes remain visible in development.
-      - name: Test (vitest, CI retry)
-        run: npm run test:ci
+      - name: Test (vitest)
+        run: npm test
 
       # Gate: any advisory in the PRODUCTION dependency tree fails the build.
       # The runtime surface is tiny (@modelcontextprotocol/sdk, diff, zod), so a

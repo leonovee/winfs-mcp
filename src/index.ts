@@ -105,7 +105,15 @@ async function main(): Promise<void> {
         );
       }
     });
-    configWatcher = watchConfigFile(config.configPath, runReload);
+    // Watcher setup is best-effort: any failure logs and degrades to
+    // hot-reload-off — it must never take the server process down.
+    try {
+      configWatcher = watchConfigFile(config.configPath, runReload);
+    } catch (err) {
+      process.stderr.write(
+        `mcp-winfs config watcher setup failed (hot-reload off): ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
   }
 
   // v0.6 §U / invariant #29: record server_mode in the first audit log entry
