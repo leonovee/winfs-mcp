@@ -423,7 +423,7 @@ path-bound вызов возвращает `EPERM_ROOT` с хинтом, ука�
 ## 6. Структура проекта
 
 ```
-mcp-winfs/
+winfs-mcp/
 ├── package.json
 ├── tsconfig.json
 ├── README.md
@@ -617,7 +617,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
 
 const server = new McpServer({
-  name: 'mcp-winfs',
+  name: 'winfs-mcp',
   version: '0.1.0'
 });
 
@@ -727,7 +727,7 @@ CC обязан подгрузить и интегрировать перед с
 **D. Структура проекта дополняется:**
 
 ```
-mcp-winfs/
+winfs-mcp/
 ├── ... (предыдущее)
 └── evals/
     ├── README.md                   # как прогонять, как интерпретировать
@@ -831,7 +831,7 @@ import { z } from "zod";
 **D. Конструктор:**
 ```ts
 const server = new Server(
-  { name: "mcp-winfs", version: "0.1.0" },
+  { name: "winfs-mcp", version: "0.1.0" },
   { capabilities: { tools: {} } }
 );
 ```

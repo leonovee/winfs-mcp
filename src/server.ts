@@ -61,7 +61,7 @@ export interface CreatedServer {
 export function createServer(config: ResolvedConfig): CreatedServer {
   const server = new McpServer(
     {
-      name: "mcp-winfs",
+      name: "winfs-mcp",
       version: config.version,
     },
     {

@@ -1,7 +1,7 @@
 # configs/
 
 This directory holds **development-time fixtures**, not runtime configuration.
-The mcp-winfs server does NOT read these files when launched by Claude Desktop
+The winfs-mcp server does NOT read these files when launched by Claude Desktop
 or any other MCP host. They exist for tests, for the Inspector, and as a
 schema reference for documentation.
 

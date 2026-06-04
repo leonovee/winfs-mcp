@@ -1,4 +1,4 @@
-# mcp-winfs evals
+# winfs-mcp evals
 
 This directory holds the Phase-4 evaluation harness described in spec
 amendment `2026-05-16 — Phase 4 (Evaluations) + mandatory reference files`.

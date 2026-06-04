@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  v1.0 evaluation suite for mcp-winfs.
+  v1.0 evaluation suite for winfs-mcp.
 
   Spec §Amendments/2026-05-16/C constraints:
     - Independent (no cross-question state)

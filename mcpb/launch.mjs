@@ -144,7 +144,7 @@ async function main() {
   const cfgPath = path.join(localAppData(), "mcp-winfs", "mcpb-config.json");
   await atomicWriteJson(cfgPath, config);
   process.stderr.write(
-    `mcp-winfs (mcpb): wrote ${allowedRoots.length} allowedRoots to ${cfgPath}\n`,
+    `winfs-mcp (mcpb): wrote ${allowedRoots.length} allowedRoots to ${cfgPath}\n`,
   );
 
   // Hand off to the real server in-process. It reads --config and owns the
@@ -156,7 +156,7 @@ async function main() {
 
 main().catch((err) => {
   process.stderr.write(
-    `mcp-winfs (mcpb) launcher fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+    `winfs-mcp (mcpb) launcher fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
   );
   process.exit(1);
 });

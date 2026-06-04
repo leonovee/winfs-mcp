@@ -1,9 +1,46 @@
 # Changelog
 
-All notable changes to mcp-winfs are recorded here. Format loosely follows
+All notable changes to winfs-mcp are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com).
 
 ## [Unreleased]
+
+## [1.0.1] — 2026-06-04 — branding unification (one name: winfs-mcp)
+
+Branding/docs-only patch. **One name everywhere — `winfs-mcp`** — matching the
+GitHub repo and the npm package. No tool, behavior, or API change; 39 tools
+unchanged.
+
+### Changed
+
+- **Brand identifiers → `winfs-mcp`**: the MCP server name (`serverInfo.name`),
+  the README H1 + prose, the `fetch_url` User-Agent, all server stderr log
+  prefixes (`winfs-mcp …`), the `audit_tail` tool title, the MCPB launcher log
+  lines, the CHANGELOG/evals/configs headings, and the spec's server-name code
+  examples + project-tree roots. (`package.json` `name` and `mcpb/manifest.json`
+  `name` were already `winfs-mcp`.)
+
+### ⚠ Back-compat — bin command renamed
+
+- **`package.json` `bin` `mcp-winfs` → `winfs-mcp`.** If you installed winfs-mcp
+  globally and reference the old command — e.g. `"command": "mcp-winfs"` or
+  `npx mcp-winfs` in `claude_desktop_config.json` — **update it to `winfs-mcp`**.
+  The recommended setup uses an absolute `node …\dist\index.js` path (unaffected),
+  and the MCPB bundle launches via its own shim (unaffected).
+
+### Deliberately NOT renamed (non-breaking)
+
+- **The runtime data directory `%LOCALAPPDATA%\mcp-winfs\` stays `mcp-winfs`.**
+  It holds your `config.json`, `audit.jsonl`, and the MCPB `mcpb-config.json`,
+  and the `audit_tail` privileged-read guard requires the parent dir to be named
+  `mcp-winfs`. Renaming it would silently relocate every existing install's
+  config + audit log and change a security check — a breaking runtime change,
+  out of scope for a branding patch. It can be migrated in a future minor/major
+  release with an explicit migration step if desired.
+
+### Other
+
+- Version `1.0.0 → 1.0.1`; bundle `winfs-1.0.1.mcpb`.
 
 ## [1.0.0] — 2026-06-03 — first stable release
 

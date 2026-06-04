@@ -6,7 +6,7 @@
 #   - You need a clean state without restarting Claude Desktop entirely
 #
 # How it works:
-#   1. Find node processes whose command line references 'winfs' or 'mcp-winfs'
+#   1. Find node processes whose command line references 'winfs' or 'winfs-mcp'
 #   2. Stop them (Stop-Process -Force)
 #   3. Claude Desktop / Claude.ai's MCP host will respawn the server on next tool call
 #
@@ -34,7 +34,7 @@ $winfsProcs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAc
     Where-Object {
         $_.CommandLine -and (
             $_.CommandLine -match 'winfs' -or
-            $_.CommandLine -match 'mcp-winfs'
+            $_.CommandLine -match 'winfs-mcp'
         )
     }
 

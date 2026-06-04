@@ -1,4 +1,4 @@
-# mcp-winfs
+# winfs-mcp
 
 [![CI](https://github.com/leonovee/winfs-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/leonovee/winfs-mcp/actions/workflows/ci.yml)
 
@@ -7,7 +7,7 @@ Desktop Commander + Filesystem MCP + windows-mcp stack with one tool that
 has hard-bounded timeouts, allowed-roots enforcement, atomic writes and a
 UTF-8-no-BOM invariant.
 
-**Status:** **v1.0.0** — **39 tools** (5 core from v0.1 + 5 mutations / batch /
+**Status:** **v1.0.1** — **39 tools** (5 core from v0.1 + 5 mutations / batch /
 introspection from v0.2 + 4 search / self-recovery from v0.3 + 4 editor /
 slicing / diff / tail from v0.4 + 11 git / exec / system / network from v0.5 +
 1 byte-offset chunked write from v0.6 + 3 consumer-agent adds from v0.7 wave 1
@@ -25,7 +25,7 @@ required); a manual clone/build is the alternative for development.
 
 ### Option A — MCPB bundle (recommended)
 
-1. Download `winfs-1.0.0.mcpb` (build it with `npm run mcpb`, or grab it from
+1. Download `winfs-1.0.1.mcpb` (build it with `npm run mcpb`, or grab it from
    the GitHub release).
 2. **Drag the `.mcpb` file onto Claude Desktop** (Settings → Extensions). Claude
    Desktop unpacks it with a bundled Node runtime — nothing else to install.
@@ -44,15 +44,15 @@ confirm phrase (below).
 ### Option B — manual clone / build (development)
 
 ```powershell
-git clone https://github.com/leonovee/winfs-mcp mcp-winfs
-cd mcp-winfs
+git clone https://github.com/leonovee/winfs-mcp winfs-mcp
+cd winfs-mcp
 npm install
 npm run build
 ```
 
 Requires Node ≥ 20. Then write a `config.json` and wire it into Claude Desktop
 as shown under **Setup in Claude Desktop** below. Build the MCPB bundle yourself
-with `npm run mcpb` (output: `dist-mcpb/winfs-1.0.0.mcpb`).
+with `npm run mcpb` (output: `dist-mcpb/winfs-1.0.1.mcpb`).
 
 ## Configuration
 
@@ -160,7 +160,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json` (or, on MSIX installs,
     "winfs": {
       "command": "node",
       "args": [
-        "C:\\tools\\mcp-winfs\\dist\\index.js",
+        "C:\\tools\\winfs-mcp\\dist\\index.js",
         "--config",
         "C:\\Users\\you\\AppData\\Local\\mcp-winfs\\config.json"
       ]
@@ -175,7 +175,7 @@ Use absolute paths for both `dist/index.js` and the config. **Do not use
 Restart Claude Desktop. The five v0.1 tools (`read`, `write`, `append`,
 `list`, `stat`) should appear in the tools list.
 
-## Tools (v1.0.0 — 39 tools)
+## Tools (v1.0.1 — 39 tools)
 
 ### Core FS (v0.1)
 
@@ -340,7 +340,7 @@ SIGKILLs every running child via `registry.shutdown()`, so workloads
 don't leak past server exit, but in-flight session ids become
 permanently invalid.
 
-A second consequence: a single mcp-winfs process is the unit of
+A second consequence: a single winfs-mcp process is the unit of
 sharing. Spawning two server instances (e.g. one in Inspector + one
 in Claude Desktop) means each has its own registry — a session
 started in one is invisible to the other. This is by design (no
@@ -401,7 +401,7 @@ The items that earlier README revisions flagged as open are now closed:
 | `Cannot find module` or hash-bang errors | Built with the wrong Node version (< 20) or `dist/` not built. | `node --version` → ≥ 20, then `npm run build`. |
 | Every call returns `EPERM_ROOT` | No `allowedRoots` configured or paths refer to a drive letter the user lacks read access to. | Call `list_allowed_directories` to see what's actually configured, or check the `configPath` field on the startup log on stderr. |
 | Audit log isn't appearing | `%LOCALAPPDATA%` not set (unusual) or path contains literal `%LOCALAPPDATA%`. | Set the env var or use an absolute `auditLogPath` in the config. |
-| Inspector says "No servers found" when launched with `--config configs/local.json` | Inspector consumes `--config` as its own flag and expects a list-of-servers JSON. | Add the `--` separator so the flag reaches mcp-winfs: `npx @modelcontextprotocol/inspector node dist/index.js -- --config configs/local.json`. |
+| Inspector says "No servers found" when launched with `--config configs/local.json` | Inspector consumes `--config` as its own flag and expects a list-of-servers JSON. | Add the `--` separator so the flag reaches winfs-mcp: `npx @modelcontextprotocol/inspector node dist/index.js -- --config configs/local.json`. |
 | Strict config schema rejects `_comment` keys | The Zod schema is `.strict()` — no JSON-native commentary. | Move documentation to `configs/README.md` or to neighbouring `.md` notes. |
 | `No result received … after waiting 4 minutes` on a tool call | Intermittent stall in the Claude Desktop ↔ winfs stdio transport (not winfs processing — ruled out 3×). Recovery pattern: 2–3 timeouts then instant success. | Retry once or twice; if it persists, fully exit Claude Desktop via the tray and relaunch. To diagnose, enable `WINFS_TRANSPORT_LOG` (below). |
 
@@ -530,7 +530,7 @@ written to stderr and auto-detect runs as a fallback.
 npm test          # vitest run — 544 tests in 98 files
 npm run test:watch
 npm run smoke      # node scripts/smoke/v0.7-smoke.mjs — 79/79 wire-level probes
-npm run mcpb       # build dist-mcpb/winfs-1.0.0.mcpb, then:
+npm run mcpb       # build dist-mcpb/winfs-1.0.1.mcpb, then:
 node scripts/smoke/mcpb-smoke.mjs   # 9/9 bundle-install probes
 ```
 

@@ -7,7 +7,7 @@
 // which leg of the stdio transport carries a multi-second stall.
 //
 // Usage:
-//   node scripts/analyze-transport-hang.mjs <winfs-transport.log> <cd-mcp-winfs.log> [thresholdMs]
+//   node scripts/analyze-transport-hang.mjs <winfs-transport.log> <cd-winfs-mcp.log> [thresholdMs]
 //
 // The CD log may be either the per-server file (mcp-server-winfs.log) or the
 // combined mcp.log (lines are filtered to those mentioning winfs). Both logs
@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 const [, , winfsPath, cdPath, thresholdArg] = process.argv;
 if (!winfsPath || !cdPath) {
   console.error(
-    "usage: node scripts/analyze-transport-hang.mjs <winfs-transport.log> <cd-mcp-winfs.log> [thresholdMs]",
+    "usage: node scripts/analyze-transport-hang.mjs <winfs-transport.log> <cd-winfs-mcp.log> [thresholdMs]",
   );
   process.exit(2);
 }

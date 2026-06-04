@@ -483,7 +483,7 @@ export function registerAuditTailTool(server: McpServer, ctx: ToolContext): void
   server.registerTool(
     "audit_tail",
     {
-      title: "Tail the mcp-winfs audit log",
+      title: "Tail the winfs-mcp audit log",
       description: `Return the last N entries from the structured audit log written by every tool call.
 Use this to recover from chat context loss: the log records tool name, sanitized args,
 status, error code (if any) and duration.

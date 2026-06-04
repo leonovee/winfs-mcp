@@ -220,7 +220,7 @@ function buildRequestHeaders(
 ): { headers: Record<string, string>; allowed: string[] } | StructuredError {
   const headers: Record<string, string> = {
     Host: url.host, // explicit Host header — needed when we connect-by-IP
-    "User-Agent": "mcp-winfs/0.5 (https://github.com/leonovee/winfs-mcp)",
+    "User-Agent": "winfs-mcp/0.5 (https://github.com/leonovee/winfs-mcp)",
     Accept: "*/*",
     "Accept-Encoding": "identity", // disable compression so byte counts are honest
     Connection: "close",

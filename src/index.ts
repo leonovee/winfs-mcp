@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   const onShutdown = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
-    process.stderr.write(`mcp-winfs received ${signal}, shutting down…\n`);
+    process.stderr.write(`winfs-mcp received ${signal}, shutting down…\n`);
     configWatcher?.close();
     ctx.registry
       .shutdown()
@@ -72,14 +72,14 @@ async function main(): Promise<void> {
   if (transportLogger) {
     instrumentTransport(transport, transportLogger);
     process.stderr.write(
-      `mcp-winfs transport logging ON → ${process.env.WINFS_TRANSPORT_LOG}\n`,
+      `winfs-mcp transport logging ON → ${process.env.WINFS_TRANSPORT_LOG}\n`,
     );
   }
 
   await server.connect(transport);
   // stdio MUST NOT log to stdout — use stderr.
   process.stderr.write(
-    `mcp-winfs v${config.version} ready (allowedRoots=${config.allowedRoots.length}, mode=${config.serverMode})\n`,
+    `winfs-mcp v${config.version} ready (allowedRoots=${config.allowedRoots.length}, mode=${config.serverMode})\n`,
   );
 
   // Phase G (child-spawn hardening wave): hot-reload allowedRoots when the
@@ -97,11 +97,11 @@ async function main(): Promise<void> {
       const r = await reloadConfigRoots(config.configPath, ctx.rootsResolver);
       if (r.ok) {
         process.stderr.write(
-          `mcp-winfs config reloaded: ${r.rootCount} allowedRoots now in effect\n`,
+          `winfs-mcp config reloaded: ${r.rootCount} allowedRoots now in effect\n`,
         );
       } else {
         process.stderr.write(
-          `mcp-winfs config reload FAILED, keeping previous config: ${r.error}\n`,
+          `winfs-mcp config reload FAILED, keeping previous config: ${r.error}\n`,
         );
       }
     });
@@ -111,7 +111,7 @@ async function main(): Promise<void> {
       configWatcher = watchConfigFile(config.configPath, runReload);
     } catch (err) {
       process.stderr.write(
-        `mcp-winfs config watcher setup failed (hot-reload off): ${err instanceof Error ? err.message : String(err)}\n`,
+        `winfs-mcp config watcher setup failed (hot-reload off): ${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
   }

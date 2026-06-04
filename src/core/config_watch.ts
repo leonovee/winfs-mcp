@@ -146,7 +146,7 @@ export function watchConfigFile(
     // Path not watchable (permissions / transient). Degrade to hot-reload-OFF:
     // the server keeps running on its current config; never crash on watch setup.
     process.stderr.write(
-      `mcp-winfs config watcher disabled (hot-reload off): ${err instanceof Error ? err.message : String(err)}\n`,
+      `winfs-mcp config watcher disabled (hot-reload off): ${err instanceof Error ? err.message : String(err)}\n`,
     );
     watching = false;
   }
