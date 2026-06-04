@@ -37,7 +37,7 @@ is the hardening, packaging, and honesty cut.
     (default false) restores prefixes for debugging. Closed across every exec,
     process, and file tool — including `start_process` (whose caller-facing
     output `command_prefix` is intentionally kept).
-- **CI.** GitHub Actions on windows-latest × Node 18/20/22: `npm ci` → build →
+- **CI.** GitHub Actions on windows-latest × Node 20/22/24: `npm ci` → build →
   test → `npm audit --omit=dev` (gate) + full audit (report-only).
 - **Honest, reconciled docs.** README rewrite (MCPB-first install), the spec
   amendment log through §AE, a complete acceptance-report chain v0.1 → v0.10, and

@@ -50,7 +50,7 @@ npm install
 npm run build
 ```
 
-Requires Node ≥ 18. Then write a `config.json` and wire it into Claude Desktop
+Requires Node ≥ 20. Then write a `config.json` and wire it into Claude Desktop
 as shown under **Setup in Claude Desktop** below. Build the MCPB bundle yourself
 with `npm run mcpb` (output: `dist-mcpb/winfs-1.0.0.mcpb`).
 
@@ -398,7 +398,7 @@ The items that earlier README revisions flagged as open are now closed:
 |---|---|---|
 | `Failed to load config at <path>` on startup | Config file has a UTF-8 BOM (Notepad / `Set-Content -Encoding UTF8` writes one). | Re-save with `Out-File -Encoding utf8NoBOM` or an editor that lets you turn the BOM off. |
 | Claude Desktop reports "MCP server failed to start", no logs | `"command": "node"` resolved to a `node.exe` that isn't on PATH from the MSIX-virtualised session. The inherited PATH does not resolve `node` for child processes under MSIX virtualisation. | Use the absolute path: `"command": "C:\\Program Files\\nodejs\\node.exe"`. |
-| `Cannot find module` or hash-bang errors | Built with the wrong Node version (< 18) or `dist/` not built. | `node --version` → ≥ 18, then `npm run build`. |
+| `Cannot find module` or hash-bang errors | Built with the wrong Node version (< 20) or `dist/` not built. | `node --version` → ≥ 20, then `npm run build`. |
 | Every call returns `EPERM_ROOT` | No `allowedRoots` configured or paths refer to a drive letter the user lacks read access to. | Call `list_allowed_directories` to see what's actually configured, or check the `configPath` field on the startup log on stderr. |
 | Audit log isn't appearing | `%LOCALAPPDATA%` not set (unusual) or path contains literal `%LOCALAPPDATA%`. | Set the env var or use an absolute `auditLogPath` in the config. |
 | Inspector says "No servers found" when launched with `--config configs/local.json` | Inspector consumes `--config` as its own flag and expects a list-of-servers JSON. | Add the `--` separator so the flag reaches mcp-winfs: `npx @modelcontextprotocol/inspector node dist/index.js -- --config configs/local.json`. |
@@ -581,5 +581,5 @@ from v0.7 wave 2b, and 2 from v0.8).
 - ✅ **v0.9.x — MCP Roots + security** — MCP-Roots union mode (spec §AC, invariant #42), flaky-test stabilisation, `powershellExePath`, `fetch_url` error-code hardening, `npm audit` 7 → 0.
 - ✅ **v0.10.x — child-spawn hardening + polish** — explicit PATHEXT on every spawn, `GIT_TERMINAL_PROMPT=0`, shell-timeout pair, `allowedRoots` hot-reload, opt-in `WINFS_TRANSPORT_LOG`, timeout-ceiling fix, ssh auto-detect, `execExtraPathDirs`, deferred-P2 closeout.
 - ✅ **v0.10.2 — MCPB packaging** — drag-install bundle for Claude Desktop (`winfs-0.10.2.mcpb` + Configure UI). `mcpb/manifest.json` + `mcpb/launch.mjs` map the install-time `user_config` onto the same runtime config with enforcement fully intact (spec §AD, invariant #45); `npm run mcpb` builds and `scripts/smoke/mcpb-smoke.mjs` proves the packed bundle installs and refuses out-of-root reads. No new tools.
-- ✅ **v0.10.3 — GPT-review fix wave** — enforced `allowedSshHosts` ssh allowlist (the `ssh -G` check is honestly relabelled *resolvability validation*, not a whitelist — invariant #35 corrected), `copy` honors unrestricted mode, audit logs store SHA-256 + byte length of script / command / output by default with opt-in `auditVerbose` prefixes (invariant #46), GitHub Actions CI (windows, Node 18/20/22), and v0.9 / v0.10 acceptance backfills. No new tools.
+- ✅ **v0.10.3 — GPT-review fix wave** — enforced `allowedSshHosts` ssh allowlist (the `ssh -G` check is honestly relabelled *resolvability validation*, not a whitelist — invariant #35 corrected), `copy` honors unrestricted mode, audit logs store SHA-256 + byte length of script / command / output by default with opt-in `auditVerbose` prefixes (invariant #46), GitHub Actions CI (windows, Node 20/22/24), and v0.9 / v0.10 acceptance backfills. No new tools.
 - ✅ **v1.0.0 — release** — the production cut: MCPB drag-install packaging, the full GPT-review hardening wave (ssh allowlist, copy unrestricted-mode fix, audit digest redaction across every exec/process/file tool), GitHub Actions CI, and an honest, reconciled doc set. **No new tools** — the surface is frozen at 39 (since v0.8). The full 10-question eval-suite *run* is a documented **post-1.0 backlog** item (`evals/README.md`), NOT a release gate.

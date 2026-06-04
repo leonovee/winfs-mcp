@@ -2,7 +2,8 @@ name: CI
 
 # winfs is a Windows-only MCP server (win32 spawn semantics, PowerShell dispatch,
 # Windows path canonicalisation), so CI runs exclusively on windows-latest across
-# the supported Node range. See package.json "engines": node >= 18.
+# the supported Node range. See package.json "engines": node >= 20. (Node 18 is
+# EOL and dropped — the dev toolchain, vitest 4, requires Node >= 20.)
 
 on:
   push:
@@ -23,13 +24,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["18", "20", "22"]
+        node: ["20", "22", "24"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js ${{ matrix.node }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
           cache: npm
