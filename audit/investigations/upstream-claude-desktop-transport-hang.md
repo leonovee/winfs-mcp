@@ -1,5 +1,7 @@
 # Upstream bug report — Claude Desktop: MCP tool calls intermittently die in the dispatch layer (silent 4-minute limbo, all servers at once)
 
+Filed: `<ISSUE_URL>` (2026-06-10)
+
 **For filing with Anthropic.** Self-contained; evidence excerpts inline,
 bodies redacted. Full logs available on request. Investigation history:
 `audit/investigations/v0.9-transport-hang.md` in
@@ -172,6 +174,10 @@ To capture it, we ran metadata-only wire logging inside the server
 timestamp (tooling: `scripts/analyze-transport-hang.mjs` in the winfs-mcp
 repo). For the hung calls the correlation is the empty set on both sides —
 that absence is the finding.
+
+**Update 2026-06-10:** the wedge recurred within ~2 minutes of a fresh
+relaunch, after 6 successful calls — degradation interval is shrinking on
+this install.
 
 ## Mitigations in use (workarounds, not fixes)
 
